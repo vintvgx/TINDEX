@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, Pressable, ScrollView, StyleSheet, Switch } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Switch } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerWheel, type TickerStatus } from './TickerWheel';
 import { IntervalWheel } from './IntervalWheel';
-import { TimeframeChips } from './TimeframeChips';
+import { TickerSwitcherContent } from './TickerSwitcherContent';
 import { ChartBottomSheet } from './ChartBottomSheet';
-import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import type { ChartSettingsSection } from './ChartControlToggles';
 import TickerSheetService from '@/common/services/TickerSheetService';
@@ -252,18 +251,13 @@ export function ChartBottomToolbar({
           onSelectTicker={onSelectTicker}
           // Search is its own modal — hand off after this sheet closes.
           onSearchPress={() => closeThen(onSearchPress)}
+          period={period}
+          onPeriodChange={onPeriodChange}
+          interval={interval}
+          allowedIntervals={allowedIntervals}
+          onIntervalChange={onIntervalChange}
           colors={colors}
         />
-        <View style={s.timeframe}>
-          <Text style={[s.sectionTitle, { color: colors.textTertiary }]}>PERIOD · INTERVAL</Text>
-          <TimeframeChips
-            period={period}
-            onPeriodChange={onPeriodChange}
-            interval={interval}
-            allowedIntervals={allowedIntervals}
-            onIntervalChange={onIntervalChange}
-          />
-        </View>
       </ChartBottomSheet>
     </>
   );
@@ -297,91 +291,6 @@ function MoreRow({ icon, iconColor, label, accessibilityLabel, onPress, trailing
       <Text style={[s.moreLabel, { color: colors.text }]} numberOfLines={1}>{label}</Text>
       {trailing}
     </Pressable>
-  );
-}
-
-/**
- * The switcher's ticker row: one sideways-scrolling line of tickers (logo +
- * symbol), ending in Search. Mounts each time the sheet opens (the Modal
- * doesn't render hidden content), and centers the active ticker on mount
- * and whenever the selection changes.
- */
-function TickerSwitcherContent({ tickers, activeTicker, onSelectTicker, onSearchPress, colors }: {
-  tickers: string[];
-  activeTicker: string;
-  onSelectTicker: (t: string) => void;
-  onSearchPress: () => void;
-  colors: any;
-}) {
-  const scrollRef = useRef<ScrollView>(null);
-  const layouts = useRef<Record<string, { x: number; w: number }>>({});
-  const viewW = useRef(0);
-  const didInitialCenter = useRef(false);
-
-  const center = useCallback((t: string, animated: boolean) => {
-    const l = layouts.current[t];
-    if (!l || !viewW.current) return false;
-    scrollRef.current?.scrollTo({ x: Math.max(0, l.x + l.w / 2 - viewW.current / 2), animated });
-    return true;
-  }, []);
-
-  const tryInitialCenter = () => {
-    if (!didInitialCenter.current && center(activeTicker, false)) didInitialCenter.current = true;
-  };
-
-  useEffect(() => {
-    if (didInitialCenter.current) center(activeTicker, true);
-  }, [activeTicker, center]);
-
-  return (
-    <ScrollView
-      ref={scrollRef}
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={s.tickerList}
-      contentContainerStyle={s.tickerListContent}
-      onLayout={(e) => { viewW.current = e.nativeEvent.layout.width; tryInitialCenter(); }}
-      accessibilityLabel="Tickers, scroll sideways"
-    >
-      {tickers.map(t => {
-        const active = t === activeTicker;
-        return (
-          <Pressable
-            key={t}
-            onPress={() => { if (!active) onSelectTicker(t); }}
-            onLayout={(e) => {
-              layouts.current[t] = { x: e.nativeEvent.layout.x, w: e.nativeEvent.layout.width };
-              if (t === activeTicker) tryInitialCenter();
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={t}
-            accessibilityState={{ selected: active }}
-            style={({ pressed }) => [
-              s.tickerChip,
-              { borderColor: active ? colors.text : colors.border },
-              active && { backgroundColor: colors.text },
-              pressed && !active && { backgroundColor: colors.surfaceSecondary },
-            ]}
-          >
-            <TickerLogo ticker={t} size={26} borderRadius={8} />
-            <Text style={[s.tickerChipText, { color: active ? colors.background : colors.text }]} numberOfLines={1}>{t}</Text>
-          </Pressable>
-        );
-      })}
-      <Pressable
-        onPress={onSearchPress}
-        accessibilityRole="button"
-        accessibilityLabel="Search tickers"
-        style={({ pressed }) => [
-          s.tickerChip,
-          { borderColor: colors.border },
-          pressed && { backgroundColor: colors.surfaceSecondary },
-        ]}
-      >
-        <Ionicons name="search" size={22} color={colors.textSecondary} />
-        <Text style={[s.tickerChipText, { color: colors.textSecondary }]}>Search</Text>
-      </Pressable>
-    </ScrollView>
   );
 }
 
@@ -493,22 +402,6 @@ const s = StyleSheet.create({
   count: { minWidth: 22, height: 20, borderRadius: 10, paddingHorizontal: 7, alignItems: 'center', justifyContent: 'center' },
   countText: { fontSize: 12, fontWeight: '800' },
   hint: { fontSize: 12 },
-  // Ticker switcher row. (No edge-to-edge bleed: ChartBottomSheet's own
-  // ScrollView would clip a negative margin.)
-  tickerList: { flexGrow: 0 },
-  tickerListContent: { paddingVertical: 2, gap: 8 },
-  tickerChip: {
-    minWidth: 66,
-    paddingVertical: 9,
-    paddingHorizontal: 10,
-    borderRadius: 14,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-  },
-  tickerChipText: { fontSize: 13, fontWeight: '700' },
-  timeframe: { gap: 4 },
   sectionTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 0.6 },
   rowLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   rowIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
