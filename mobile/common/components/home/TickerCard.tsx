@@ -1,7 +1,8 @@
 import React, { useMemo, useRef } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Path, Circle } from 'react-native-svg';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useThemeColors, useAppColorScheme } from '@/lib/useColorScheme';
 import { useChartDisplayPrefs } from '@/hooks/useChartDisplayPrefs';
 import { useSparkQuery } from '@/hooks/queries/ticker/useSparkQuery';
@@ -41,7 +42,7 @@ const SPARK_W = 64;
 const SPARK_H = 30;
 const SPARK_PAD = 3;
 
-function sparkPath(closes: number[]): string | null {
+function sparkPath(closes: number[]): { d: string; end: { x: number; y: number } } | null {
   if (closes.length < 2) return null;
   let min = Infinity;
   let max = -Infinity;
@@ -52,13 +53,12 @@ function sparkPath(closes: number[]): string | null {
   const span = max - min || 1;
   const w = SPARK_W - SPARK_PAD * 2;
   const h = SPARK_H - SPARK_PAD * 2;
-  return closes
-    .map((c, i) => {
-      const x = SPARK_PAD + (i / (closes.length - 1)) * w;
-      const y = SPARK_PAD + (1 - (c - min) / span) * h;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(' ');
+  const pts = closes.map((c, i) => ({
+    x: SPARK_PAD + (i / (closes.length - 1)) * w,
+    y: SPARK_PAD + (1 - (c - min) / span) * h,
+  }));
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+  return { d, end: pts[pts.length - 1] };
 }
 
 export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }) {
@@ -125,10 +125,19 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
   // rect, not the previous one. Mid-collapse taps reuse the last rect.
   const onPress = () => measure((rect) => openChart(openTicker, rect));
 
+  // Press feedback on an inner Animated.View — never a Pressable style
+  // function: NativeWind's css-interop (0.1.22) treats a function `style` as
+  // an inline style object, spreads it to `{}`, and that `{}` replaces the
+  // function — the card lost every style and stacked as a column.
+  const scale = useSharedValue(1);
+  const pressStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
   return (
     <Pressable
       ref={ref}
       onPress={onPress}
+      onPressIn={() => { scale.value = withTiming(0.985, { duration: 90 }); }}
+      onPressOut={() => { scale.value = withTiming(1, { duration: 140 }); }}
       onLayout={(e) => {
         onLayout?.(e.nativeEvent.layout.height);
         // Keep the rect fresh so openChartOverlay() callers (ticker sheet,
@@ -137,46 +146,61 @@ export function TickerCard({ onLayout }: { onLayout?: (height: number) => void }
       }}
       accessibilityRole="button"
       accessibilityLabel={`Expand ${ticker} chart`}
-      style={({ pressed }) => [styles.card, styles.shadow, pressed && { transform: [{ scale: 0.985 }] }]}
+      style={styles.shadow}
     >
-      <Glass radius={20} isDark={isDark} />
-      <TickerLogo
-        uri={`https://financialmodelingprep.com/image-stock/${ticker}.png`}
-        ticker={ticker}
-        size={34}
-        borderRadius={10}
-      />
-      <View style={styles.main}>
-        <View style={styles.row}>
-          <Text style={[styles.sym, { color: colors.text }]}>{ticker}</Text>
-          {price != null && (
-            <Text style={[styles.px, { color: colors.text }]}>{price.toFixed(2)}</Text>
-          )}
+      <Animated.View style={[styles.card, pressStyle]}>
+        <Glass radius={20} isDark={isDark} />
+        <TickerLogo
+          uri={`https://financialmodelingprep.com/image-stock/${ticker}.png`}
+          ticker={ticker}
+          size={34}
+          borderRadius={17}
+        />
+        <View style={styles.main}>
+          <View style={styles.line1}>
+            <Text style={[styles.sym, { color: colors.text }]} numberOfLines={1}>{ticker}</Text>
+            {price != null && (
+              <Text style={[styles.px, { color: colors.text }]} numberOfLines={1}>{price.toFixed(2)}</Text>
+            )}
+          </View>
+          <View style={styles.line2}>
+            {changePct != null && (
+              <Text style={[styles.pct, { color: changeColor }]} numberOfLines={1}>
+                {up ? '+' : ''}{changePct.toFixed(2)}% today
+              </Text>
+            )}
+            {signal && (
+              <View style={[styles.sigPill, { backgroundColor: signal.color + '26' }]}>
+                <Text style={[styles.sigText, { color: signal.color }]} numberOfLines={1}>{signal.text}</Text>
+              </View>
+            )}
+          </View>
         </View>
-        <View style={[styles.row, { marginTop: 2 }]}>
-          {changePct != null && (
-            <Text style={[styles.pct, { color: changeColor }]}>
-              {up ? '+' : ''}{changePct.toFixed(2)}% today
-            </Text>
+        <Svg width={SPARK_W} height={SPARK_H} style={styles.spark}>
+          {path && (
+            <>
+              <Path d={path.d} stroke={changeColor} strokeWidth={1.6} fill="none" strokeLinejoin="round" strokeLinecap="round" />
+              <Circle cx={path.end.x} cy={path.end.y} r={2.4} fill={changeColor} />
+            </>
           )}
-          {signal && (
-            <View style={[styles.sigPill, { backgroundColor: signal.color + '22', borderColor: signal.color }]}>
-              <Text style={[styles.sigText, { color: signal.color }]} numberOfLines={1}>{signal.text}</Text>
-            </View>
-          )}
-        </View>
-      </View>
-      <Svg width={SPARK_W} height={SPARK_H}>
-        {path && (
-          <Path d={path} stroke={changeColor} strokeWidth={1.6} fill="none" strokeLinejoin="round" strokeLinecap="round" />
-        )}
-      </Svg>
-      <Ionicons name="chevron-up" size={18} color={colors.textSecondary} />
+        </Svg>
+        <Ionicons name="chevron-up" size={18} color={colors.textSecondary} />
+      </Animated.View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  // Outer Pressable: static style only (see pressStyle above).
+  shadow: {
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  // Inner row — ~56pt tall: 34 logo / two text lines + 2×10 padding.
   card: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -185,24 +209,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  shadow: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.16,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  main: { flex: 1, minWidth: 0 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  main: { flex: 1, minWidth: 0, gap: 1 },
+  line1: { flexDirection: 'row', alignItems: 'baseline', gap: 8 },
+  line2: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sym: { fontSize: 15, fontWeight: '700' },
   px: { fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
   pct: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
   sigPill: {
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     paddingVertical: 2,
-    borderRadius: 9,
-    borderWidth: 1,
+    borderRadius: 5,
     flexShrink: 1,
   },
-  sigText: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
+  sigText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.4 },
+  spark: { marginLeft: 'auto' },
 });
