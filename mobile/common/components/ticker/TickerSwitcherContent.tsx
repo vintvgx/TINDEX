@@ -6,6 +6,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { TickerLogo } from '@/common/components/ui/TickerLogo';
 import { INTERVAL_LABEL } from '@/lib/chartIntervals';
 import { PERIOD_STOPS } from './TimeframeChips';
+import { PressableStyled } from './PressableStyled';
 import type { PricePeriod, TickerResponse } from '@/common/types/blogPosts/ticker';
 import type { WatchlistResponse } from '@/common/types/watchlist';
 
@@ -116,7 +117,7 @@ export function TickerSwitcherContent({
           const q = quotes[t];
           const pct = q?.changePct;
           return (
-            <Pressable
+            <PressableStyled
               key={t}
               onPress={() => { if (!active) onSelectTicker(t); }}
               onLayout={(e) => {
@@ -126,33 +127,31 @@ export function TickerSwitcherContent({
               accessibilityRole="button"
               accessibilityLabel={pct != null ? `${t}, ${fmtPct(pct)} today` : t}
               accessibilityState={{ selected: active }}
-              style={({ pressed }) => [
+              style={[
                 s.card,
                 { borderColor: active ? colors.text : colors.border },
-                active ? { backgroundColor: colors.text } : pressed && { backgroundColor: colors.surfaceSecondary },
+                active && { backgroundColor: colors.text },
               ]}
+              pressedStyle={active ? undefined : { backgroundColor: colors.surfaceSecondary }}
             >
               <TickerLogo uri={q?.logoUrl} ticker={t} size={26} borderRadius={13} />
               <Text style={[s.symbol, { color: active ? colors.background : colors.text }]} numberOfLines={1}>{t}</Text>
               {pct != null && (
                 <Text style={[s.pct, { color: pct >= 0 ? colors.success : colors.error }]}>{fmtPct(pct)}</Text>
               )}
-            </Pressable>
+            </PressableStyled>
           );
         })}
-        <Pressable
+        <PressableStyled
           onPress={onSearchPress}
           accessibilityRole="button"
           accessibilityLabel="Search tickers"
-          style={({ pressed }) => [
-            s.card,
-            { borderColor: colors.border },
-            pressed && { backgroundColor: colors.surfaceSecondary },
-          ]}
+          style={[s.card, { borderColor: colors.border }]}
+          pressedStyle={{ backgroundColor: colors.surfaceSecondary }}
         >
           <Ionicons name="search" size={26} color={colors.textSecondary} />
           <Text style={[s.symbol, { color: colors.textSecondary }]}>Search</Text>
-        </Pressable>
+        </PressableStyled>
       </ScrollView>
 
       <Segment

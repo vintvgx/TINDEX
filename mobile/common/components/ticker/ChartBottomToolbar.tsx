@@ -5,6 +5,7 @@ import { useThemeColors } from '@/lib/useColorScheme';
 import { TickerWheel, type TickerStatus } from './TickerWheel';
 import { IntervalWheel } from './IntervalWheel';
 import { TickerSwitcherContent } from './TickerSwitcherContent';
+import { PressableStyled } from './PressableStyled';
 import { ChartBottomSheet } from './ChartBottomSheet';
 import type { PricePeriod } from '@/common/types/blogPosts/ticker';
 import type { ChartSettingsSection } from './ChartControlToggles';
@@ -161,19 +162,17 @@ export function ChartBottomToolbar({
           accessibilityLabel="Chart tools"
         >
           {buttons.map(b => (
-            <Pressable
+            <PressableStyled
               key={b.key}
               onPress={b.onPress}
               hitSlop={4}
-              style={({ pressed }) => [
-                s.toolBtn,
-                { backgroundColor: pressed ? colors.surfaceSecondary : 'transparent' },
-              ]}
+              style={[s.toolBtn, { backgroundColor: 'transparent' }]}
+              pressedStyle={{ backgroundColor: colors.surfaceSecondary }}
               accessibilityRole="button"
               accessibilityLabel={b.label}
             >
               <Ionicons name={b.icon} size={21} color={colors.textSecondary} />
-            </Pressable>
+            </PressableStyled>
           ))}
         </View>
       </View>
@@ -275,22 +274,22 @@ function MoreRow({ icon, iconColor, label, accessibilityLabel, onPress, trailing
   colors: any;
 }) {
   return (
-    <Pressable
+    <PressableStyled
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      style={({ pressed }) => [
+      style={[
         s.moreRow,
         !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.separator },
-        pressed && { opacity: 0.6 },
       ]}
+      pressedStyle={{ opacity: 0.6 }}
     >
       <View style={[s.moreIcon, { backgroundColor: colors.surfaceSecondary }]}>
         <Ionicons name={icon} size={18} color={iconColor ?? colors.textSecondary} />
       </View>
       <Text style={[s.moreLabel, { color: colors.text }]} numberOfLines={1}>{label}</Text>
       {trailing}
-    </Pressable>
+    </PressableStyled>
   );
 }
 
