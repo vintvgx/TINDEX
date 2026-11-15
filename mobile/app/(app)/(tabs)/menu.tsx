@@ -5,8 +5,8 @@ import { router } from 'expo-router';
 import { useThemeColors } from '@/lib/useColorScheme';
 
 /**
- * 0.7 redesign Menu — every screen in one place. Tapping a row navigates
- * there (the Home wheel relabels via the tab state).
+ * Menu — every screen in one place, reached from Profile (0.8: no longer a
+ * tab of its own). Tapping a row navigates there.
  */
 
 const SECTIONS: { title: string; items: { key: string; label: string; icon: string }[] }[] = [
@@ -18,7 +18,7 @@ const SECTIONS: { title: string; items: { key: string; label: string; icon: stri
       { key: 'daily_review', label: 'Daily', icon: 'calendar-outline' },
       { key: 'tradelog', label: 'Log', icon: 'list-outline' },
       { key: 'accounts', label: 'Account', icon: 'wallet-outline' },
-      { key: 'profile', label: 'Profile', icon: 'person-outline' },
+      { key: 'strategy', label: 'Strategy', icon: 'git-branch-outline' },
     ],
   },
   {
@@ -30,7 +30,6 @@ const SECTIONS: { title: string; items: { key: string; label: string; icon: stri
       { key: 'dashboard', label: 'Dashboard', icon: 'grid-outline' },
       { key: 'position', label: 'Positions', icon: 'briefcase-outline' },
       { key: 'options', label: 'Contracts', icon: 'layers-outline' },
-      { key: 'strategy', label: 'Strategy', icon: 'git-branch-outline' },
       { key: 'simulation', label: 'Simulation', icon: 'flask-outline' },
     ],
   },

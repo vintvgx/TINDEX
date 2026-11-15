@@ -18,11 +18,15 @@ import { TickerCard } from '@/common/components/home/TickerCard';
 
 export const TAB_NAV_TABS = [
   { key: 'feed', label: 'Home', icon: 'home', iconOff: 'home-outline' },
-  { key: 'monitor', label: 'Monitor', icon: 'pulse', iconOff: 'pulse-outline' },
+  { key: 'strategy', label: 'Strategy', icon: 'git-branch', iconOff: 'git-branch-outline' },
   { key: 'tradelog', label: 'Log', icon: 'receipt', iconOff: 'receipt-outline' },
-  { key: 'menu', label: 'Menu', icon: 'grid', iconOff: 'grid-outline' },
+  { key: 'monitor', label: 'Monitor', icon: 'pulse', iconOff: 'pulse-outline' },
   { key: 'profile', label: 'Profile', icon: 'person', iconOff: 'person-outline' },
 ] as const;
+
+/** Non-tab routes that highlight a parent tab — Menu is reached from
+ *  Profile. Any other non-tab route hides the highlight. */
+const PARENT_TAB: Record<string, string> = { menu: 'profile' };
 
 /** Screens whose content runs UNDER the bar (they reserve their own bottom
  *  clearance via useTabNavHeight) — same rule as WheelTabBar. */
@@ -73,7 +77,8 @@ export const TabNavBar: React.FC<BottomTabBarProps> = ({ state, navigation }) =>
   const insets = useSafeAreaInsets();
 
   const routeName = state.routes[state.index]?.name;
-  const activeIndex = TAB_NAV_TABS.findIndex((t) => t.key === routeName);
+  const tabKey = PARENT_TAB[routeName ?? ''] ?? routeName;
+  const activeIndex = TAB_NAV_TABS.findIndex((t) => t.key === tabKey);
   const floating = FLOATING_ON.has(routeName ?? '');
 
   const goTo = useCallback(
