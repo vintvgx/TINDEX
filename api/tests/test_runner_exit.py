@@ -200,7 +200,11 @@ def test_trail_and_cascade_still_preserve_one():
     _hit_tp1(em)
     em.update_qty(em.qty_remaining - 1)
     em._cascade_down_ticks = 99
-    assert em.evaluate(1.05)["type"] == "HOLD"          # below trail, cascade loaded — last one kept
+    em._cascade_fire_pending = True
+    # Cascade loaded but never sells the last contract; the trail (0.8.04) owns it.
+    # 1.05 is above breakeven (1.00) and below the 1.12 floor -> trail confirm, not cascade.
+    a = em.evaluate(1.05)
+    assert a["reason"] in ("RUNNER_TRAIL_CONFIRMING", "RUNNER_TRAIL_STOP")
 
 
 # ── Runner profit floor ──────────────────────────────────────────────────────
@@ -303,3 +307,105 @@ def test_engine_reversal_disables_orb_override():
 def _em_unseeded():
     p = get_profile("TREND_RIDER", {"runner_exit_enabled": True})
     return ExitManager(1.00, 4, {"orh": 99.0, "orl": 98.0}, "CALL", "15:58", p, is_zero_dte=False)
+
+
+# ── Runner trail manages the last contract (0.8.04, Nov 17 SPY 736P) ─────────
+
+def _rider(qty=4):
+    p = get_profile("TREND_RIDER", {"runner_mode": "trail", "runner_trail_pct": 0.20,
+                                    "tp1_mult": 1.3, "tp2_mult": 1.6})
+    return ExitManager(2.35, qty, {"orh": 737.49, "orl": 737.0}, "PUT", "15:58", p,
+                       is_zero_dte=False)
+
+
+def _to_runner(em, left):
+    """TP1 + TP2 fire, then shrink to `left` contracts (user rungs elided)."""
+    for _ in range(3):
+        a = em.evaluate(3.23)
+        if a["reason"] == "TP1":
+            break
+    assert a["reason"] == "TP1"
+    em.update_qty(a["qty"])
+    a = em.evaluate(3.80)
+    assert a["reason"] in ("TP2", "TP2_FULL_CLOSE")
+    em.update_qty(em.qty_remaining - left)
+    assert em.qty_remaining == left
+
+
+def _confirm(em, price):
+    """First breach tick starts the 60s timer; age it, then the next tick fires."""
+    a = em.evaluate(price)
+    assert (a["type"], a["reason"]) == ("HOLD", "RUNNER_TRAIL_CONFIRMING")
+    em._trail_breach_start -= timedelta(seconds=61)
+    return em.evaluate(price)
+
+
+def test_nov17_replay_trail_sells_last_contract_near_peak_floor():
+    em = _rider()
+    _to_runner(em, 1)
+    for px in (7.52, 8.5, 9.45):
+        assert em.evaluate(px)["type"] == "HOLD"
+    assert em.runner_trail == pytest.approx(9.45 * 0.8)            # ratchet kept updating
+    a = _confirm(em, 7.4)
+    assert (a["type"], a["qty"], a["reason"]) == ("CLOSE_PARTIAL", 1, "RUNNER_TRAIL_STOP")
+    assert em.runner_trail == pytest.approx(7.56)                  # not the frozen ~6.02 floor
+    assert a["reason"] != "RUNNER_INVALIDATION"
+
+
+def test_trail_tick_back_above_floor_cancels_timer():
+    em = _rider()
+    _to_runner(em, 1)
+    em.evaluate(9.45)
+    assert em.evaluate(7.4)["reason"] == "RUNNER_TRAIL_CONFIRMING"
+    em.evaluate(8.0)
+    assert em._trail_breach_start is None
+
+
+def test_small_run_keeps_midpoint_gate():
+    em = _rider()
+    _to_runner(em, 1)
+    em.evaluate(5.00)                                  # peak <= 2x TP2 (7.52); floor 4.00
+    a = em.evaluate(3.80)                              # below floor but above midpoint 3.41
+    assert a["type"] == "HOLD" and a["reason"] != "RUNNER_TRAIL_CONFIRMING"
+    assert em._trail_breach_start is None              # gate held the trail disarmed
+    assert em.evaluate(3.40)["reason"] == "RUNNER_TRAIL_CONFIRMING"   # armed at midpoint
+
+
+def test_t2_peak_just_above_tp2_does_not_fire_early():
+    em = _rider()
+    _to_runner(em, 1)
+    em.evaluate(3.90)
+    for px in (3.70, 3.50, 3.45):
+        assert em.evaluate(px)["type"] == "HOLD"
+
+
+def test_multi_contract_trail_sells_exactly_one():
+    em = _rider(qty=6)
+    _to_runner(em, 3)
+    em.evaluate(9.45)
+    a = _confirm(em, 7.4)
+    assert (a["type"], a["qty"], a["reason"]) == ("CLOSE_PARTIAL", 1, "RUNNER_TRAIL_STOP")
+
+
+def test_trail_never_sells_at_or_below_breakeven():
+    em = _rider()
+    _to_runner(em, 1)
+    em.evaluate(3.50)
+    a = em.evaluate(2.30)
+    assert a["reason"] != "RUNNER_TRAIL_STOP" and a["reason"] != "RUNNER_TRAIL_CONFIRMING"
+
+
+def test_trail_fire_logs_peak_and_floor():
+    events = []
+    em = _rider()
+    em.v2_sink = events.append
+    _to_runner(em, 1)
+    em.evaluate(9.45)
+    _confirm(em, 7.4)
+    ev = [e for e in events if e["code"] == "RUNNER_TRAIL_FIRE"]
+    assert ev and ev[0]["evidence"]["peak"] == pytest.approx(9.45)
+    assert ev[0]["evidence"]["trigger"] == pytest.approx(7.56)
+
+
+def test_runner_invalidation_off_for_trend_rider():
+    assert get_profile("TREND_RIDER").get("runner_exit_enabled") in (None, False)

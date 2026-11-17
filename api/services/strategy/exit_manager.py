@@ -67,6 +67,12 @@ BE_GRACE_MAX_SECONDS = 120
 # switch to flip back to True, and the underlying override-persistence path
 # (ORBEngine / TradeLogger.update_exit_levels) still needs its own look.
 _RUNNER_TRAIL_HARD_DISABLED = False
+
+# TP2-midpoint gate scaling (0.8.04, Nov 17 SPY 736P: peak ~4x entry, trail
+# disarmed until premium fell to the TP1/TP2 midpoint, giving back 84% of the
+# gain before arming). The midpoint gate only applies while the peak premium is
+# at or below this multiple of TP2; past it the trail arms at its ratcheted floor.
+TRAIL_MIDPOINT_GATE_MAX_MULT = 2.0
 _CASCADE_EXIT_HARD_DISABLED = False
 
 # Cascade v2 (trade-logging-cascade-v2 brief, 2026-11-01): replaces the v1
@@ -692,14 +698,13 @@ class ExitManager:
         # shape as the block below — it never dumps the whole runner at once
         # (2026-08-07: the old CLOSE_ALL-on-first-touch behavior cut real
         # continuations short as hard as an unconfirmed single tick did).
-        # qty_remaining > 1 (not > 0) is the same "always preserve 1" floor
-        # cascade uses: once only the last contract is left, trail stops
-        # firing entirely and that contract exits only via TP2/BE stop/EOD/
-        # manual — trail alone can never fully close a position, only the
-        # (breakeven-moved) hard stop can.
+        # Last contract (0.8.04): the trail now manages the runner at
+        # qty_remaining == 1 too — _free_qty() always reserves the last
+        # contract, so it must not gate it, and the ratchet keeps updating
+        # from the peak. (The cascade still never sells the last contract.)
         if (not _RUNNER_TRAIL_HARD_DISABLED and self._runner_mode == "trail"
-                and self.tp1_hit and self.qty_remaining > 1
-                and (not self._rungs or self._free_qty() > 0)):
+                and self.tp1_hit and self.qty_remaining >= 1
+                and (not self._rungs or self.qty_remaining == 1 or self._free_qty() > 0)):
             new_trail = current_option_price * (1 - self.profile["runner_trail_pct"])
             if new_trail > self.runner_trail:
                 self.runner_trail = new_trail
@@ -710,15 +715,17 @@ class ExitManager:
             # it) until price gives back enough to reach the TP1/TP2
             # midpoint — a genuine pullback signal, not the first breath —
             # then resume normal trail behavior against the floor already
-            # built up. AND'd with the ratchet check below, not instead of
-            # it: the midpoint is an extra floor layered under a tight
-            # runner_trail_pct, not a replacement for it.
+            # built up. The gate lifts once the peak exceeds
+            # TRAIL_MIDPOINT_GATE_MAX_MULT x TP2: on a big run the ratcheted
+            # floor alone arms the trail.
             trail_armed = True
-            if self.tp2_hit:
+            if self.tp2_hit and self._peak_premium <= self.tp2 * TRAIL_MIDPOINT_GATE_MAX_MULT:
                 midpoint = (self.tp1 + self.tp2) / 2
                 trail_armed = current_option_price <= midpoint
 
-            if trail_armed and current_option_price <= self.runner_trail:
+            # The breakeven stop owns everything at/below entry.
+            if (trail_armed and current_option_price <= self.runner_trail
+                    and current_option_price > self.breakeven_level()):
                 if self._trail_breach_start is None:
                     self._trail_breach_start = datetime.now(ET)
                 elapsed = (datetime.now(ET) - self._trail_breach_start).total_seconds()
@@ -729,6 +736,13 @@ class ExitManager:
                         return self._action("HOLD", 0, "RUNNER_TRAIL_CONFIRMING")
                 else:
                     self._trail_breach_start = None
+                    self._log_decision("RUNNER_TRAIL_FIRE", peak=self._peak_premium,
+                                       floor=self.runner_trail, price=current_option_price,
+                                       qty_remaining=self.qty_remaining)
+                    self._emit_v2({"code": "RUNNER_TRAIL_FIRE", "price": current_option_price,
+                                   "qty_before": self.qty_remaining, "qty_closed": 0,
+                                   "evidence": {"peak": self._peak_premium,
+                                                "trigger": self.runner_trail}})
                     return self._action("CLOSE_PARTIAL", 1, "RUNNER_TRAIL_STOP",
                                         current_option_price)
             else:
