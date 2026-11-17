@@ -14,7 +14,8 @@ interface KeyLevelsResponse {
  *
  * @param statusFilter - Optional status filter ("watching", "confirmed", "expired", "cancelled")
  */
-export function useKeyLevels(statusFilter?: LevelStatus) {
+/** `enabled` (default true) pauses the query + its 30s poll for an idle caller. */
+export function useKeyLevels(statusFilter?: LevelStatus, enabled: boolean = true) {
   const { authState: { user, isLoading: authLoading } } = useAuth();
 
   return useQuery({
@@ -45,7 +46,7 @@ export function useKeyLevels(statusFilter?: LevelStatus) {
 
       return data.data || [];
     },
-    enabled: !!user?.id && !authLoading,
+    enabled: !!user?.id && !authLoading && enabled,
     staleTime: 30 * 1000,
     // Confirmations happen server-side off a live bar stream and land as a
     // push notification — poll so a level that confirms while this screen

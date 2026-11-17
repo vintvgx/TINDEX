@@ -19,7 +19,6 @@ import { ReviewDetailModal } from '@/common/components/review/ReviewDetailModal'
 import { AddReviewNoteModal } from '@/common/components/review/AddReviewNoteModal';
 import { ReviewNoteActionModal } from '@/common/components/review/ReviewNoteActionModal';
 import { useToast } from '@/common/components/ui/Toast';
-import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { LiveModeToggle, type AccountMode } from '@/common/components/strategy/LiveModeToggle';
 import { MarketDigestModal } from '@/common/components/digest/MarketDigestModal';
 import { MUSE_BRIEF_PREVIEW } from '@/common/components/digest/museBriefPreview';
@@ -102,7 +101,6 @@ export default function DailyReviewScreen() {
   const { data, isLoading, isFetching, refetch } = usePerformanceReviews(180, paperMode);
   const generateReview = useGenerateReview();
   const toast = useToast();
-  const tabBarHeight = useFloatingTabBarHeight();
 
   // Notes/TODOs are account-mode-independent (general project notes, not
   // trade commentary) — fetched unfiltered so the calendar dots cover every
@@ -276,7 +274,7 @@ export default function DailyReviewScreen() {
       <LiveModeToggle mode={mode} onChange={handleModeChange} colors={colors} />
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: selectedDate ? tabBarHeight + 140 : tabBarHeight + 20 }}
+        contentContainerStyle={{ paddingBottom: selectedDate ? 140 : 20 }}
         scrollIndicatorInsets={{ right: 1 }}
       >
         {/* Month navigation */}
@@ -467,7 +465,7 @@ export default function DailyReviewScreen() {
           maxHeight: '70%',
           backgroundColor: colors.surface,
           borderTopWidth: 1, borderTopColor: colors.border,
-          paddingHorizontal: 20, paddingTop: 16, paddingBottom: tabBarHeight + 16,
+          paddingHorizontal: 20, paddingTop: 16, paddingBottom: 16,
         }}>
           {/* Selected date info */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>

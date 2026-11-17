@@ -14,7 +14,7 @@ import { AdvancedPriceChart, ChartReferenceLine, ChartWatchZone, ChartWatchDraft
 import type { LegacyTradeLine, LegacyTradeMarker } from '@/common/components/ticker/AdvancedPriceChart';
 import { TVChart } from '@/common/components/ticker/TVChart';
 import { ZoneDetailSheet } from '@/common/components/ticker/ZoneDetailSheet';
-import { ChartBottomToolbar } from '@/common/components/ticker/ChartBottomToolbar';
+import { ChartBottomToolbar, CHART_PILLS_CLEARANCE } from '@/common/components/ticker/ChartBottomToolbar';
 import { ChartPositionStrip } from '@/common/components/ticker/ChartPositionStrip';
 import { TechnicalsSheet } from '@/common/components/ticker/TechnicalsSheet';
 import { ChartTechnicalsStrip } from '@/common/components/ticker/ChartTechnicals';
@@ -89,11 +89,19 @@ const PINNED_TICKERS = ['SPY', 'IWM', 'QQQ'];
  * ChartsContent is the route-independent body; the default export is the
  * thin route wrapper that feeds ?ticker= in as initialTicker.
  */
-export function ChartsContent({ initialTicker, topInset }: {
+export function ChartsContent({ initialTicker, topInset, headerRightInset = 0, active = true }: {
   initialTicker?: string | null;
   /** Override the top safe-area padding — 0 when rendered under the global
    *  ticker tape (the tape already clears the notch). */
   topInset?: number;
+  /** Right padding for the top rows (technicals strip, trade status) so
+   *  nothing renders behind a control overlaid at the top right — the
+   *  chart overlay's collapse button. */
+  headerRightInset?: number;
+  /** False while the chart overlay is fully collapsed (it stays mounted
+   *  between opens): pauses every poll/stream below and hands the tape back
+   *  to the marquee. Always true for the route. */
+  active?: boolean;
 }) {
   const colors = useThemeColors();
   const [contractsModalOpen, setContractsModalOpen] = useState(false);
@@ -101,10 +109,10 @@ export function ChartsContent({ initialTicker, topInset }: {
   // ── Ticker list, by priority: open positions (live, then paper-only) →
   // tickers with an active watch level → SPY/IWM/QQQ → followed
   // (alphabetical). Each ticker appears once, at its highest tier. ──────
-  const allLive = useLivePositionsData('live');
-  const allPaper = useLivePositionsData('paper');
+  const allLive = useLivePositionsData('live', undefined, active);
+  const allPaper = useLivePositionsData('paper', undefined, active);
   const { data: follows } = useUserORBFollows();
-  const { data: allKeyLevels } = useKeyLevels();
+  const { data: allKeyLevels } = useKeyLevels(undefined, active);
 
   const liveTickers = useMemo(
     // Dev sim positions don't pull their ticker into the wheel (no fetches).
@@ -168,9 +176,11 @@ export function ChartsContent({ initialTicker, topInset }: {
   // A tapped zone-alert push lands here with ?ticker= (see
   // NotificationNavigationService) — open that ticker's chart. The overlay
   // passes its ticker in as a prop instead of route params.
+  // The overlay keeps this mounted between opens, so re-run on each open
+  // (`active` false → true) too — not just when the prop changes.
   useEffect(() => {
-    if (initialTicker) openTicker(initialTicker);
-  }, [initialTicker, openTicker]);
+    if (active && initialTicker) openTicker(initialTicker);
+  }, [active, initialTicker, openTicker]);
 
   // Last-viewed ticker, persisted (useChartDisplayPrefs.lastChartTicker):
   // the overlay unmounts on close, so without this every reopen fell back
@@ -235,7 +245,9 @@ export function ChartsContent({ initialTicker, topInset }: {
   // background, heating the phone. Keep them alive 30s after blur (in case
   // he's just peeking at another tab), then halt everything until refocus.
   const tabFocused = useIsFocused();
-  const [chartLive, setChartLive] = useState(true);
+  const [chartLiveTail, setChartLive] = useState(true);
+  // Collapsed overlay: halt at once (no 30s tail — it's not a peek).
+  const chartLive = chartLiveTail && active;
   useEffect(() => {
     if (tabFocused) {
       setChartLive(true);
@@ -420,7 +432,10 @@ export function ChartsContent({ initialTicker, topInset }: {
     () => positionsData.filteredPositions.filter(p => !isHidden(positionHideKey(p))),
     [positionsData.filteredPositions, isHidden],
   );
-  const liveValues = useStrategyLiveValues(useMemo(() => overlayPositions.map(p => p.strategy_id), [overlayPositions]));
+  const liveValues = useStrategyLiveValues(useMemo(
+    () => (active ? overlayPositions.map(p => p.strategy_id) : []),
+    [overlayPositions, active],
+  ));
   const receivedAtRef = useRef(new Map<object, number>());
   // The lines' delta comes from the open contract's own snapshot (spec §3.2):
   // refetched every 5 minutes and whenever the trade's state changes; the
@@ -429,7 +444,7 @@ export function ChartsContent({ initialTicker, topInset }: {
   const lineLive = lineTrade ? liveValues[lineTrade.strategy_id]?.data ?? null : null;
   const deltaNonce = lineLive ? `${lineLive.qty_remaining}:${lineLive.tp1_hit}:${lineLive.tp2_hit}` : '';
   const contractDelta = useContractDelta(lineTrade?.contract, deltaNonce,
-                                         !!lineTrade && tickerPrefs.showTradeLines, 5 * 60_000);
+                                         !!lineTrade && tickerPrefs.showTradeLines && active, 5 * 60_000);
   const overlayTrades = useMemo<OverlayTradeInput[]>(() => {
     const out: OverlayTradeInput[] = [];
     const seen = new Map<object, number>();
@@ -451,7 +466,7 @@ export function ChartsContent({ initialTicker, topInset }: {
   }, [overlayPositions, liveValues, liveByStrategy, contractDelta.data, lineTrade]);
   const [selectedTradeKey, setSelectedTradeKey] = useState<string | null>(null);
   useEffect(() => { setSelectedTradeKey(null); }, [activeTicker]);
-  const overlayFocused = useIsFocused();
+  const overlayFocused = useIsFocused() && active;
   const tradeLinesOn = tickerPrefs.showTradeLines;
   const overlayFrame = useTradeOverlay(tradeLinesOn ? overlayTrades : NO_OVERLAY_TRADES, selectedTradeKey, overlayFocused);
   // Trade Mode engages on an OPEN TRADE (spec 2026-11-10 §3.3), not on a
@@ -505,7 +520,7 @@ export function ChartsContent({ initialTicker, topInset }: {
   // ── Morning Brief levels + trigger alert (Chart settings → Overlays) ──
   // Same levels, colors and alert as the brief's Pick Detail Sheet.
   const briefLevels = useBriefLevels(activeTicker);
-  const briefAlert = useBriefTriggerAlert(briefLevels);
+  const briefAlert = useBriefTriggerAlert(briefLevels, active);
   const briefToast = useToast();
   const showBriefLevels = tickerPrefs.showBriefLevels;
   const briefRows = useMemo(() => {
@@ -947,15 +962,19 @@ export function ChartsContent({ initialTicker, topInset }: {
   const { setInfo: setTapeInfo } = useChartTape();
   const tapeSignal = chart.technicals.data?.signal ?? null;
   // Header pill = the same lens the strip leads with (spec §2.2): the open
-  // trade's side, else the derived intraday side, with the daily verdict as
-  // a labelled second pill whenever it reads differently.
+  // trade's side, else the derived intraday side — just direction + score
+  // ("CALL +4"). The lens names and the other lens live in the Technicals
+  // sheet; no second pill (0.8 device feedback).
   const tapeLens = useMemo<ChartTapeLens | null>(() => {
     const v = resolveLens(chart.technicals.data, tradeSide);
     if (!v) return null;
-    // Spelled out (PR #121 N5): which lens the pill is reading.
-    const lensName = v.source === 'trade' ? 'Trade' : v.source === 'composite' ? 'Composite' : 'Signal';
-    const text = v.comp ? `${lensName} ${v.side} ${fmtScore(v.comp.total)}` : `${lensName} WAIT`;
-    return { side: v.side, text, other: v.otherLens };
+    if (v.comp) return { side: v.side, text: `${v.side} ${fmtScore(v.comp.total)}`, other: null };
+    // No composite for the lens side — the higher side, like the strip. The
+    // pill's side (its color) follows the side named in the text.
+    const call = v.call?.total ?? 0;
+    const put = v.put?.total ?? 0;
+    const side: 'CALL' | 'PUT' = put > call ? 'PUT' : 'CALL';
+    return { side, text: `${side} ${fmtScore(side === 'PUT' ? put : call)}`, other: null };
   }, [chart.technicals.data, tradeSide]);
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
 
@@ -994,7 +1013,7 @@ export function ChartsContent({ initialTicker, topInset }: {
           saying — SIM, lines that can't be drawn (and why), or a frame that
           hasn't arrived. A missing line always explains itself (§3.3). */}
       {tradeMode && (overlayFrame?.sim || overlayUnavailable || overlayFrame?.linesNote) ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 12, paddingTop: 4, gap: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', paddingHorizontal: 12, paddingRight: headerRightInset || 12, paddingTop: 4, gap: 8 }}>
           {overlayFrame?.sim && (
             <Text style={{ color: '#111', backgroundColor: colors.warning, fontSize: 10, fontWeight: '800', paddingHorizontal: 5, borderRadius: 4, overflow: 'hidden' }}>SIM</Text>
           )}
@@ -1008,7 +1027,7 @@ export function ChartsContent({ initialTicker, topInset }: {
         </View>
       ) : null}
       {chart.showStrip && (
-        <View style={{ paddingHorizontal: 12, paddingTop: 4 }}>
+        <View style={{ paddingHorizontal: 12, paddingRight: headerRightInset || 12, paddingTop: 4 }}>
           <ChartTechnicalsStrip
             check={chart.technicals.data}
             isLoading={chart.technicals.isLoading}
@@ -1021,12 +1040,15 @@ export function ChartsContent({ initialTicker, topInset }: {
       {/* Chart — fills everything above the toolbar now that the identity
           header, ticker chips, and chrome rows are gone. Keyed on the
           ticker so switching fully remounts it (see the old comment). */}
-      <View style={{ flex: 1, minHeight: screenH * 0.5, paddingHorizontal: 12, paddingTop: 8 }} onLayout={onChartAreaLayout}>
+      {/* paddingBottom keeps the plot (time axis, newest candles) above the
+          floating pills; the area's background still runs under them. */}
+      <View style={{ flex: 1, minHeight: screenH * 0.5, paddingHorizontal: 12, paddingTop: 8, paddingBottom: CHART_PILLS_CLEARANCE }} onLayout={onChartAreaLayout}>
         {chartAreaHeight > 0 && (
           <ChartLivePane
             ticker={activeTicker}
             stockData={stockData}
-            tapeActive={isFocused}
+            tapeActive={isFocused && active}
+            streamActive={active}
             tapeSignal={tapeSignal}
             tapeLens={tapeLens}
             tapeLoading={tickerLoading && !stockData}
@@ -1086,7 +1108,9 @@ export function ChartsContent({ initialTicker, topInset }: {
                   period={period}
                   onPeriodChange={setPeriod}
                   positive={displayPositive}
-                  height={Math.max(220, chartAreaHeight)}
+                  // onLayout measures the padded box — take the pill
+                  // clearance back off so the plot ends above the pills.
+                  height={Math.max(220, chartAreaHeight - CHART_PILLS_CLEARANCE)}
                   orbRange={effectiveOrb}
                   showOrbRange={chart.showOrb}
                   livePrice={resolvedLivePrice ?? null}
@@ -1161,53 +1185,53 @@ export function ChartsContent({ initialTicker, topInset }: {
             </View>
           </View>
         )}
+        {/* Bottom toolbar — two floating pills (ticker + interval wheels |
+            tools) over the bottom of the chart, which runs under them. */}
+        <ChartBottomToolbar
+          tickers={effectiveTickerList}
+          activeTicker={activeTicker}
+          onSelectTicker={setSelectedTicker}
+          onSearchPress={() => setSearchOpen(true)}
+          isFollowed={isActiveFollowed}
+          onToggleFollow={handleToggleFollow}
+          period={period}
+          onPeriodChange={setPeriod}
+          interval={chartInterval}
+          allowedIntervals={allowedIntervals}
+          onIntervalChange={setChartInterval}
+          technicalsContent={
+            <TechnicalsSheet
+              check={chart.technicals.data}
+              isLoading={chart.technicals.isLoading}
+              error={chart.technicals.error}
+              onReviewEntry={reviewEntryFromTechnicals}
+              tradeSide={tradeSide}
+            />
+          }
+          technicalsOpen={technicalsOpen}
+          onTechnicalsOpenChange={setTechnicalsOpen}
+          positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
+          settingsSections={chart.sections}
+          onPositionsPress={toggleExpanded}
+          openPositionCount={totalPositionsForTicker}
+          tickerStatus={tickerStatus}
+        />
       </View>
-
-      {/* Bottom toolbar — TradingView-style: ticker wheel + period slider
-          fixed left, tool buttons scroll right. Hugs the chart. */}
-      <ChartBottomToolbar
-        tickers={effectiveTickerList}
-        activeTicker={activeTicker}
-        onSelectTicker={setSelectedTicker}
-        onSearchPress={() => setSearchOpen(true)}
-        isFollowed={isActiveFollowed}
-        onToggleFollow={handleToggleFollow}
-        period={period}
-        onPeriodChange={setPeriod}
-        interval={chartInterval}
-        allowedIntervals={allowedIntervals}
-        onIntervalChange={setChartInterval}
-        technicalsContent={
-          <TechnicalsSheet
-            check={chart.technicals.data}
-            isLoading={chart.technicals.isLoading}
-            error={chart.technicals.error}
-            onReviewEntry={reviewEntryFromTechnicals}
-            tradeSide={tradeSide}
-          />
-        }
-        technicalsOpen={technicalsOpen}
-        onTechnicalsOpenChange={setTechnicalsOpen}
-        positioningContent={<OptionsPositioningPanel ticker={activeTicker} />}
-        settingsSections={chart.sections}
-        onPositionsPress={toggleExpanded}
-        openPositionCount={totalPositionsForTicker}
-        tickerStatus={tickerStatus}
-      />
 
       {/* Bottom slot, position-aware: the live account summary when this
           ticker has no open position (not tappable), else a compact
           position strip pager that expands in place into the full cards
           (pushing the chart up — it keeps its min-height guard). The
           toolbar's positions button drives the same expanded state. */}
-      <ChartPositionStrip
+      {/* Collapsed: unmounted — its rows each hold a live-price socket. */}
+      {active && <ChartPositionStrip
         data={positionsData}
         ticker={activeTicker}
         expanded={expanded}
         onExpandedChange={setExpanded}
         onLiveUpdate={handlePositionLiveUpdate}
         bottomInset={bottomInset}
-      />
+      />}
 
       <SearchBottomSheet
         visible={searchOpen}
@@ -1259,7 +1283,7 @@ const TAPE_PUBLISH_MS = 1_000;
  * Alpaca connection falls back instantly) or the last REST snapshot.
  */
 function ChartLivePane({
-  ticker, stockData, tapeActive, tapeSignal, tapeLens, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
+  ticker, stockData, tapeActive, streamActive = true, tapeSignal, tapeLens, tapeLoading, onSignalPress, onTickerPress, setTapeInfo, renderChart,
   isBrief = false,
 }: {
   ticker: string;
@@ -1267,6 +1291,8 @@ function ChartLivePane({
   isBrief?: boolean;
   stockData: { current_price?: number | null; price_change?: number | null; price_change_percent?: number | null } | undefined;
   tapeActive: boolean;
+  /** Live price subscriptions on (off while the chart overlay is collapsed). */
+  streamActive?: boolean;
   tapeSignal: ChartTapeInfo['signal'];
   tapeLens: ChartTapeLens | null;
   tapeLoading: boolean;
@@ -1277,8 +1303,8 @@ function ChartLivePane({
 }) {
   const { source: chartPriceSource } = useChartPriceSource();
   const useAlpacaStream = chartPriceSource === 'alpaca';
-  const chartStream = useChartLiveStream(ticker, useAlpacaStream);
-  const { livePrices } = useMarketStream([ticker], { enabled: true });
+  const chartStream = useChartLiveStream(ticker, useAlpacaStream && streamActive);
+  const { livePrices } = useMarketStream([ticker], { enabled: streamActive });
   const alpacaUsable = useAlpacaStream && !chartStream.error && chartStream.price != null;
   const streamPrice = alpacaUsable ? chartStream.price! : livePrices[ticker] ?? null;
   const resolvedLivePrice = streamPrice ?? stockData?.current_price ?? null;

@@ -17,7 +17,6 @@ import { PendingConfirmationCard } from '@/common/components/strategy/PendingCon
 import { useCandidateBreakouts } from '@/hooks/queries/strategy/useCandidateBreakouts';
 import { CandidateBreakoutCard } from '@/common/components/strategy/CandidateBreakoutCard';
 import { useLivePositionsData, LivePositionsBody } from '@/common/components/strategy/LivePositionsSection';
-import { useFloatingTabBarHeight } from '@/common/components/ui/CustomTabBar';
 import { useORBMonitoringState } from '@/hooks/queries/orb/useORBMonitoringState';
 import { useOrbServiceAlert } from '@/hooks/useOrbServiceAlert';
 import {
@@ -248,7 +247,6 @@ const DashboardScreen = () => {
   const sentimentHex = sentiment
     ? (SENTIMENT_COLOR[sentiment.color] ?? colors.textSecondary)
     : colors.textSecondary;
-  const tabBarHeight = useFloatingTabBarHeight();
 
   return (
     <SafeAreaView style={[styles.root, { backgroundColor: colors.background }]}>
@@ -258,7 +256,7 @@ const DashboardScreen = () => {
           <RefreshControl refreshing={isLoading} onRefresh={refresh}
                           tintColor={colors.accent} colors={[colors.accent]} />
         }
-        contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: 16 }]}
       >
         {/* ── Header ──────────────────────────────────────────────────────── */}
         {/* No page title here — the "Dashboard" segment pill above already

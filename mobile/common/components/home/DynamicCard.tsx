@@ -6,6 +6,9 @@ import Animated, {
   interpolate,
   Extrapolation,
   runOnJS,
+  useSharedValue,
+  withTiming,
+  interpolateColor,
   type SharedValue,
 } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -262,13 +265,7 @@ export function DynamicCard({
             {/* view dots */}
             <View style={styles.dots}>
               {DYNAMIC_VIEWS.map((v, i) => (
-                <View
-                  key={v}
-                  style={[
-                    styles.dot,
-                    { backgroundColor: i === viewIndex ? colors.text : colors.textTertiary + '55' },
-                  ]}
-                />
+                <PageDot key={v} active={i === viewIndex} size={6} activeWidth={16} colors={colors} />
               ))}
             </View>
           </Animated.View>
@@ -285,10 +282,7 @@ export function DynamicCard({
               {/* page dots, so a sideways swipe has visible feedback */}
               <View style={styles.stripDots} pointerEvents="none">
                 {DYNAMIC_VIEWS.map((v, i) => (
-                  <View
-                    key={v}
-                    style={[styles.stripDot, { backgroundColor: i === viewIndex ? colors.text : colors.textTertiary + '55' }]}
-                  />
+                  <PageDot key={v} active={i === viewIndex} size={4} activeWidth={10} colors={colors} />
                 ))}
               </View>
             </Animated.View>
@@ -297,6 +291,28 @@ export function DynamicCard({
       )}
     </Animated.View>
   );
+}
+
+/** Page indicator (0.8 mock `.deck-dots`): the active page is an elongated
+ *  pill in textSecondary, the rest are round surfaceTertiary dots. Width and
+ *  color animate over 200ms when the page changes. */
+function PageDot({ active, size, activeWidth, colors }: {
+  active: boolean;
+  size: number;
+  activeWidth: number;
+  colors: ReturnType<typeof useThemeColors>;
+}) {
+  const t = useSharedValue(active ? 1 : 0);
+  useEffect(() => {
+    t.value = withTiming(active ? 1 : 0, { duration: 200 });
+  }, [active, t]);
+  const off = colors.surfaceTertiary;
+  const on = colors.textSecondary;
+  const style = useAnimatedStyle(() => ({
+    width: size + (activeWidth - size) * t.value,
+    backgroundColor: interpolateColor(t.value, [0, 1], [off, on]),
+  }));
+  return <Animated.View style={[{ height: size, borderRadius: size / 2 }, style]} />;
 }
 
 const styles = StyleSheet.create({
@@ -317,12 +333,7 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 6,
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    gap: 5,
   },
   collapsedRow: {
     flexDirection: 'row',
@@ -339,5 +350,4 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 4,
   },
-  stripDot: { width: 4, height: 4, borderRadius: 2 },
 });

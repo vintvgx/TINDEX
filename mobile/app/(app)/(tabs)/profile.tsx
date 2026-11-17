@@ -190,6 +190,46 @@ const ProfileScreen = () => {
           <Text style={{ color: colors.textSecondary, fontSize: 14 }}>{email}</Text>
         </View>
 
+        {/* Menu — every screen; reached from here since 0.8 dropped the Menu tab */}
+        <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
+          <View
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: 16,
+              borderWidth: 1,
+              borderColor: colors.border,
+              overflow: 'hidden',
+            }}
+          >
+            <TouchableOpacity
+              onPress={() => go('/(app)/(tabs)/menu')}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Menu, all screens"
+              style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
+            >
+              <View
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  backgroundColor: colors.iconButton,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: 12,
+                }}
+              >
+                <Ionicons name="grid-outline" size={17} color={colors.textSecondary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: colors.text, fontSize: 15, fontWeight: '500' }}>Menu</Text>
+                <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 1 }}>All screens</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={15} color={colors.textTertiary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* Account section — moved from the old Menu tab */}
         <View style={{ paddingHorizontal: 20, marginBottom: 24 }}>
           <Text
@@ -447,7 +487,7 @@ const ProfileScreen = () => {
                     Chart Account Balance
                   </Text>
                   <Text style={{ color: colors.textTertiary, fontSize: 12, marginTop: 1 }}>
-                    Which account's equity and day P&L show at the bottom of Charts
+                    Which account&apos;s equity and day P&L show at the bottom of Charts
                   </Text>
                 </View>
               </View>
