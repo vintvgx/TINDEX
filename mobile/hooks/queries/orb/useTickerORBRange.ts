@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase/supabase";
 import type { ORBRange } from "@/common/types/orb";
@@ -13,11 +12,10 @@ import type { ORBRange } from "@/common/types/orb";
  */
 export function useTickerORBRange(ticker: string) {
   // trade_date is an ET trading day — toISOString() is UTC, which is already
-  // "tomorrow" between 8pm-midnight ET and would miss today's row.
-  const today = useMemo(
-    () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date()),
-    [],
-  );
+  // "tomorrow" between 8pm-midnight ET and would miss today's row. Evaluated
+  // every render (not memoized): the chart now stays mounted while collapsed,
+  // so a memoized date would keep asking for yesterday's row after midnight.
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
 
   return useQuery({
     queryKey: ["orb-range", ticker, today],

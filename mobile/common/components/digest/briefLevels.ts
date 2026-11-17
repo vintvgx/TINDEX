@@ -87,9 +87,11 @@ export function useBriefTickers(): Set<string> {
  * bar's volume — no volume gate). Off until armed; `armed` reads the
  * existing level, so the sheet and the chart show the same state.
  */
-export function useBriefTriggerAlert(levels: BriefLevels | null) {
+/** `enabled` (default true) pauses the key-levels poll for an idle caller
+ *  (the collapsed, kept-mounted chart). */
+export function useBriefTriggerAlert(levels: BriefLevels | null, enabled: boolean = true) {
   const { authState: { user } } = useAuth();
-  const { data: keyLevels } = useKeyLevels();
+  const { data: keyLevels } = useKeyLevels(undefined, enabled);
   const { mutate: createLevel, isPending: creating } = useCreateKeyLevel();
   const { mutate: cancelLevel, isPending: cancelling } = useCancelKeyLevel();
 

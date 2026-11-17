@@ -520,7 +520,7 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0, a
   // ── Morning Brief levels + trigger alert (Chart settings → Overlays) ──
   // Same levels, colors and alert as the brief's Pick Detail Sheet.
   const briefLevels = useBriefLevels(activeTicker);
-  const briefAlert = useBriefTriggerAlert(briefLevels);
+  const briefAlert = useBriefTriggerAlert(briefLevels, active);
   const briefToast = useToast();
   const showBriefLevels = tickerPrefs.showBriefLevels;
   const briefRows = useMemo(() => {
@@ -968,16 +968,13 @@ export function ChartsContent({ initialTicker, topInset, headerRightInset = 0, a
   const tapeLens = useMemo<ChartTapeLens | null>(() => {
     const v = resolveLens(chart.technicals.data, tradeSide);
     if (!v) return null;
-    let text: string;
-    if (v.comp) {
-      text = `${v.side} ${fmtScore(v.comp.total)}`;
-    } else {
-      // No composite for the lens side — the higher side, like the strip.
-      const call = v.call?.total ?? 0;
-      const put = v.put?.total ?? 0;
-      text = put > call ? `PUT ${fmtScore(put)}` : `CALL ${fmtScore(call)}`;
-    }
-    return { side: v.side, text, other: null };
+    if (v.comp) return { side: v.side, text: `${v.side} ${fmtScore(v.comp.total)}`, other: null };
+    // No composite for the lens side — the higher side, like the strip. The
+    // pill's side (its color) follows the side named in the text.
+    const call = v.call?.total ?? 0;
+    const put = v.put?.total ?? 0;
+    const side: 'CALL' | 'PUT' = put > call ? 'PUT' : 'CALL';
+    return { side, text: `${side} ${fmtScore(side === 'PUT' ? put : call)}`, other: null };
   }, [chart.technicals.data, tradeSide]);
   const openContracts = useCallback(() => setContractsModalOpen(true), []);
 

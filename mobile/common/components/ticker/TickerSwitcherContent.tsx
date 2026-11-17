@@ -121,8 +121,14 @@ export function TickerSwitcherContent({
               key={t}
               onPress={() => { if (!active) onSelectTicker(t); }}
               onLayout={(e) => {
+                const prevX = layouts.current[t]?.x;
                 layouts.current[t] = { x: e.nativeEvent.layout.x, w: e.nativeEvent.layout.width };
-                if (t === activeTicker) tryInitialCenter();
+                if (t !== activeTicker) return;
+                // First layout: center without animating. Later, the active
+                // card can move without the selection changing (tickers
+                // inserted before it as positions update) — follow it.
+                if (!didInitialCenter.current) tryInitialCenter();
+                else if (prevX !== e.nativeEvent.layout.x) center(t, true);
               }}
               accessibilityRole="button"
               accessibilityLabel={pct != null ? `${t}, ${fmtPct(pct)} today` : t}

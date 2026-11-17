@@ -74,8 +74,10 @@ export function TickerCard({ onLayout, layoutKey }: {
   const { openChart } = useChartOverlay();
   const ref = useRef<View>(null);
 
-  const { data: spark } = useSparkQuery(ticker, '1D', { interval: '5m' });
-  const rawCloses = spark?.data?.closes;
+  const { data: spark, isPlaceholderData } = useSparkQuery(ticker, '1D', { interval: '5m' });
+  // keepPreviousData hands back the PREVIOUS ticker's history while this
+  // ticker's loads — never label it as this ticker.
+  const rawCloses = isPlaceholderData ? undefined : spark?.data?.closes;
   const closes = useMemo(() => rawCloses ?? [], [rawCloses]);
   const { livePrices } = useMarketStream([ticker]);
   const live = livePrices[ticker];

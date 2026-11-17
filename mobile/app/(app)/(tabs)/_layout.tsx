@@ -6,6 +6,7 @@ import Animated, {
   interpolate,
   runOnJS,
   useAnimatedStyle,
+  useDerivedValue,
   useReducedMotion,
   useSharedValue,
   withTiming,
@@ -78,28 +79,42 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
   const progress = useSharedValue(0);
   /** Overlay host size + the origin rect in HOST coords (host = below the tape). */
   const hostSize = useSharedValue({ width: 0, height: 0 });
-  const origin = useSharedValue({ x: 0, y: 0, width: 0, height: 0 });
+  /** Host's window offset and the card's window rect. The host-relative
+   *  origin is derived from BOTH, so whichever async measurement lands last
+   *  (host or card), the origin is recomputed with the current pair. */
+  const hostWin = useSharedValue({ x: 0, y: 0 });
+  const originWin = useSharedValue({ x: 0, y: 0, width: 0, height: 0 });
+  const origin = useDerivedValue(() => ({
+    x: originWin.value.x - hostWin.value.x,
+    y: originWin.value.y - hostWin.value.y,
+    width: originWin.value.width,
+    height: originWin.value.height,
+  }));
   const hostRef = useRef<View>(null);
-  const hostWin = useRef({ x: 0, y: 0 });
   /** Set on a fresh mount: the first expand waits one frame for layout. */
   const justMounted = useRef(false);
+  /** Bumped on every open/close intent. An animation completion applies its
+   *  state only if no newer intent started meanwhile — `runOnJS` queues the
+   *  call, so a finished expand/collapse can land after the next intent. */
+  const intent = useRef(0);
+  const coverIf = useCallback((token: number) => {
+    if (token === intent.current) setCovered(true);
+  }, []);
+  const deactivateIf = useCallback((token: number) => {
+    if (token === intent.current) setActive(false);
+  }, []);
 
   const measureHost = useCallback(() => {
     hostRef.current?.measureInWindow((x, y, width, height) => {
-      hostWin.current = { x, y };
+      hostWin.value = { x, y };
       hostSize.value = { width, height };
     });
-  }, [hostSize]);
+  }, [hostSize, hostWin]);
 
-  // Window → host coords. Recomputed on each open (and on a host re-layout).
+  // The card's window rect for this open (converted to host coords above).
   useEffect(() => {
-    origin.value = {
-      x: originRect.x - hostWin.current.x,
-      y: originRect.y - hostWin.current.y,
-      width: originRect.width,
-      height: originRect.height,
-    };
-  }, [originRect, tapeH, origin]);
+    originWin.value = { ...originRect };
+  }, [originRect, originWin]);
 
   useEffect(() => {
     if (chartOpen && !rendered) {
@@ -114,12 +129,13 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
     if (chartOpen) {
       chartOverlayRendered.current = true;
       setActive(true);
+      const token = ++intent.current;
       const expand = () => {
         progress.value = withTiming(
           1,
           { duration: reduceMotion ? 0 : 300, easing: Easing.bezier(0.2, 0.8, 0.2, 1) },
           (fin) => {
-            if (fin) runOnJS(setCovered)(true);
+            if (fin) runOnJS(coverIf)(token);
           },
         );
       };
@@ -142,11 +158,12 @@ function ShellContent({ insets }: { insets: ReturnType<typeof useSafeAreaInsets>
       // Tab bar back first (under the overlay), then shrink into the card.
       // The chart stays mounted; it just goes inactive once collapsed.
       setCovered(false);
+      const token = ++intent.current;
       progress.value = withTiming(
         0,
         { duration: reduceMotion ? 0 : 250, easing: Easing.bezier(0.4, 0, 0.2, 1) },
         (fin) => {
-          if (fin) runOnJS(setActive)(false);
+          if (fin) runOnJS(deactivateIf)(token);
         },
       );
     }
