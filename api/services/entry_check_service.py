@@ -937,7 +937,9 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
                   vwap: Optional[float] = None, orh: Optional[float] = None,
                   orl: Optional[float] = None,
                   intraday_closes: Optional[list[tuple]] = None,
-                  mode: str = "daily") -> dict:
+                  mode: str = "daily",
+                  min_composite: Optional[int] = None,
+                  min_hold_bars: int = 0) -> dict:
     """
     `mode` — see GATE_MODES. Only "trend"/"rsi" change timeframe between
     daily / intraday / and; every other factor is judged identically in all
@@ -961,7 +963,9 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
     mode = normalize_gate_mode(mode)
     if mode == "composite":
         return evaluate_composite_gate(ticker, direction, price, vwap=vwap, orh=orh, orl=orl,
-                                       intraday_closes=intraday_closes)
+                                       intraday_closes=intraday_closes,
+                                       min_composite=min_composite,
+                                       min_hold_bars=min_hold_bars)
     required = [k for k in GATE_FACTORS if k in (required or [])]
     rows: dict = {}
     errors: list[str] = []
@@ -1123,16 +1127,43 @@ def evaluate_gate(ticker: str, direction: str, required: list[str], price: float
     }
 
 
+def _hold_bars_ok(intraday_closes: Optional[list[tuple]], direction: str,
+                 orh: Optional[float], orl: Optional[float], n: int) -> bool:
+    """Confirmation-mode hold: the last `n` 1-min closes beyond the breakout
+    level (CALL above ORH, PUT below ORL). Fails closed on short data — if
+    fewer than `n` closes are available the hold cannot be confirmed."""
+    if n <= 0:
+        return True
+    if not intraday_closes or len(intraday_closes) < n:
+        return False
+    level = orh if direction == "CALL" else orl
+    if level is None:
+        return False
+    closes = [c for _, c in intraday_closes[-n:]]
+    if direction == "CALL":
+        return all(c is not None and c > level for c in closes)
+    return all(c is not None and c < level for c in closes)
+
+
 def evaluate_composite_gate(ticker: str, direction: str, price: float,
                             vwap: Optional[float] = None, orh: Optional[float] = None,
                             orl: Optional[float] = None,
-                            intraday_closes: Optional[list[tuple]] = None) -> dict:
+                            intraday_closes: Optional[list[tuple]] = None,
+                            min_composite: Optional[int] = None,
+                            min_hold_bars: int = 0) -> dict:
     """
     Composite-mode gate: the -14..+14 score for this direction decides.
     STRONG → pass; MODERATE → pass with needs_confirm (the engine routes the
     entry through a confirmation pause); WATCH / NO_TRADE → blocked. Uses the
     engine's live VWAP / ORB when given, fetched bars otherwise. Fails closed
     when the score can't be computed at all.
+
+    Confirmation mode (account daily loss caps, 0.8.05): `min_composite`
+    replaces the tier bar — the score must reach it to pass, and there is
+    no MODERATE / confirm-first path at all (needs_confirm is False).
+    `min_hold_bars` additionally requires that many consecutive 1-min
+    closes beyond the breakout level. Both are enforced here so the gate
+    watch's per-minute re-check naturally retries until they are met.
     """
     from services.composite_technicals import compute_composite
     errors: list[str] = []
@@ -1163,9 +1194,27 @@ def evaluate_composite_gate(ticker: str, direction: str, price: float,
                              vwap=vwap, orh=orh, orl=orl, orb_forming=orb_forming)
     available = sum(1 for r in comp["indicators"] if r["available"])
     tier = comp["tier"] if available else "NO_TRADE"
-    passed = tier in ("STRONG", "MODERATE")
+    if min_composite is not None:
+        # Confirmation mode: the score bar replaces the tier bar, and the
+        # MODERATE confirm-first path is off — only the full bar enters.
+        passed = comp["total"] >= min_composite
+        needs_confirm = False
+    else:
+        passed = tier in ("STRONG", "MODERATE")
+        needs_confirm = tier == "MODERATE"
+    if min_hold_bars:
+        hold_ok = _hold_bars_ok(intraday_closes, direction, orh, orl, min_hold_bars)
+        passed = passed and hold_ok
+    else:
+        hold_ok = True
     detail = ", ".join(f"{r['label']} {r['score']:+d}" for r in comp["indicators"] if r["available"])
     summary = f"composite {comp['total']:+d}/{comp['max']} {tier.replace('_', ' ')}"
+    if min_composite is not None:
+        summary += f" — confirmation mode needs ≥+{min_composite}"
+        if min_hold_bars:
+            summary += f" + {min_hold_bars} closes beyond the level"
+            if not hold_ok:
+                summary += " (hold not met)"
     if not available:
         summary += " — no indicator data"
     elif comp["missing"]:
@@ -1173,7 +1222,7 @@ def evaluate_composite_gate(ticker: str, direction: str, price: float,
     return {
         "mode": "composite",
         "passed": passed,
-        "needs_confirm": tier == "MODERATE",
+        "needs_confirm": needs_confirm,
         "required": [],
         "matched": comp["total"],
         "total": comp["max"],
