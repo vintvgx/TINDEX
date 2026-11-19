@@ -9,7 +9,11 @@ Filter pipeline (hard — fail → discard):
              (budget mode: overridden by _BUDGET_DELTA_RANGES[fib_level])
   4. Ask > 0
   5. Bid/ask spread % ≤ max_spread_pct (profile override → default 0.25)
-  5b. Budget mode only: ask ≤ budget_max_ask
+  5b. Ask ≤ max_entry_premium ($3.00 hard cap, all modes — Kareem
+      2026-11-19; budget mode additionally caps at budget_max_ask when
+      lower). The fallback below respects the same cap, so a day with no
+      strict-filter survivor steps further OTM instead of buying an
+      expensive contract.
 
   (Open interest is NOT filtered — it isn't returned by the option-chain snapshot;
    the bid/ask spread filter is the remaining liquidity proxy.)
@@ -59,6 +63,16 @@ logger = logging.getLogger(__name__)
 
 # Default max spread fraction (ask - bid) / ask when profile omits "max_spread_pct"
 _DEFAULT_MAX_SPREAD_PCT = 0.25
+
+# Hard cap on the per-contract entry premium (Kareem, 2026-11-19 — no
+# contract over $3.00, whatever the move). Nov 19 734P at $6.21 proved an
+# expensive contract can eat a $4 move whole via IV crush: the premium is
+# mostly time value inflated by 0DTE IV, and the crush offsets the
+# intrinsic gain. Applies in every mode, not just budget mode. The $0.35
+# premium floor is the bottom of the band; this is the top. For 0DTE SPY
+# the cap doubles as an OTM control: anything over $3.00 is either ITM or
+# very-near-ATM with spiked IV.
+MAX_ENTRY_PREMIUM = 3.00
 
 # Budget OTM mode: delta ranges per fib level (lower delta = further OTM)
 _BUDGET_DELTA_RANGES = {
@@ -111,6 +125,7 @@ def select_contract(
     budget_max_ask: Optional[float] = None,
     budget_fib_level: str = "1.0",
     minutes_since_orb_close: Optional[float] = None,
+    max_entry_premium: Optional[float] = None,
 ) -> dict | None:
     today          = date.today()
     option_type    = "call" if direction == "CALL" else "put"
@@ -121,6 +136,14 @@ def select_contract(
     delta_min    = profile["target_delta_min"]
     delta_max    = profile["target_delta_max"]
     max_spread   = profile.get("max_spread_pct", _DEFAULT_MAX_SPREAD_PCT)
+
+    # Hard premium cap (2026-11-19): no contract over $3.00, whatever the
+    # move. `max_entry_premium=None` means the $3.00 default; pass
+    # float("inf") to disable (tests only). Budget mode caps lower when
+    # budget_max_ask is set — the effective cap is the min of the two.
+    premium_cap = MAX_ENTRY_PREMIUM if max_entry_premium is None else max_entry_premium
+    if budget_mode and budget_max_ask is not None:
+        premium_cap = min(premium_cap, budget_max_ask)
 
     # ── Budget mode: override thresholds with fib-anchored OTM parameters ─────
     # (Open-interest floors are no longer applied — OI isn't available from the
@@ -244,8 +267,10 @@ def select_contract(
         # 3. Spread quality (liquidity proxy)
         if spread_pct > max_spread:
             continue
-        # 3b. Budget mode: reject contracts above the per-contract price cap
-        if budget_mode and budget_max_ask is not None and ask_f > budget_max_ask:
+        # 3b. Hard premium cap — no contract over $3.00, whatever the move
+        # (Kareem 2026-11-19; Nov 19 734P at $6.21). Budget mode caps lower
+        # when budget_max_ask is set (premium_cap is already the min).
+        if ask_f > premium_cap:
             continue
 
         candidates.append(row)
@@ -257,22 +282,26 @@ def select_contract(
                            ticker, direction)
             return None
 
-        if budget_mode and budget_max_ask is not None:
-            affordable = [c for c in all_valid if c["ask"] <= budget_max_ask]
-            if not affordable:
-                logger.warning("[ContractSelector] Budget OTM: no affordable contract ≤ $%.2f for %s",
-                               budget_max_ask, ticker)
-                return None
+        # The fallback must respect the premium cap too — otherwise a day
+        # with no strict-filter survivor would still buy an expensive
+        # contract. Affordable = ask ≤ premium_cap in every mode (in budget
+        # mode premium_cap is already min($3.00, budget_max_ask)).
+        affordable = [c for c in all_valid if c["ask"] <= premium_cap]
+        if not affordable:
+            logger.warning("[ContractSelector] No affordable contract ≤ $%.2f for %s %s — skipping entry",
+                           premium_cap, ticker, direction)
+            return None
+        if budget_mode:
             anchor = fib_anchor if fib_anchor is not None else breakout_level
             affordable.sort(key=lambda c: (abs(c["strike"] - anchor), c["spread_pct"]))
             best = affordable[0]
         else:
             # Prefer the OTM side of the breakout in the trade direction, nearest the
             # money; fall back to nearest overall. Capital is sized downstream.
-            directional = [c for c in all_valid
+            directional = [c for c in affordable
                            if (c["strike"] >= breakout_level if direction == "CALL"
                                else c["strike"] <= breakout_level)]
-            pool = directional or all_valid
+            pool = directional or affordable
             pool.sort(key=lambda c: (abs(c["strike"] - breakout_level), c["spread_pct"]))
             best = pool[0]
 
