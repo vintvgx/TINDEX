@@ -32,6 +32,7 @@ from services.strategy.debug_log import DebugLogBuffer
 from services.strategy.limit_order_tracker import LimitOrderTracker, MAX_RUNGS as LADDER_MAX_RUNGS
 from services.utils.orb_data_hub import get_orb_data_hub, OrbBar
 from services.strategy.gate_watch import GateWatchMixin
+from services.strategy import account_risk
 
 logger = logging.getLogger(__name__)
 ET = pytz.timezone("America/New_York")
@@ -948,10 +949,16 @@ class ORBEngine(GateWatchMixin):
             if self.profile_key == "MUSE_REVERSAL":
                 # Spec §10.2: do NOT enter on the scorer fire. Arm the
                 # 3-bar VWAP hold; entry happens in _muse_on_bar once the
-                # hold completes and intraday technicals reach >= 5.
+                # hold completes and intraday technicals reach >= 5
+                # (>= 7 in account confirmation mode, 0.8.05).
                 # The old REVERSAL path below is untouched.
                 from services.strategy.muse_reversal import VwapSideTracker
-                hold_bars = int(self.profile.get("vwap_hold_bars", 3))
+                # Confirmation mode (0.8.05): once the account is past the
+                # soft cap, the VWAP hold lengthens — the reversal has to
+                # prove itself for longer before it may enter.
+                hold_bars = (account_risk.MUSE_CONFIRM_HOLD_BARS
+                             if account_risk.mode(self.paper) == account_risk.CONFIRMATION
+                             else int(self.profile.get("vwap_hold_bars", 3)))
                 reclaim_bars = int(self.profile.get("vwap_reclaim_bars", 3))
                 self._muse_armed = True
                 self._muse_direction = direction
@@ -1155,7 +1162,8 @@ class ORBEngine(GateWatchMixin):
 
     def _check_technicals_gate(self, direction: str, trigger_price: float, required: list,
                                mode: str = "daily", notify: bool = True,
-                               quiet: bool = False) -> tuple[bool, bool, Optional[dict]]:
+                               quiet: bool = False,
+                               confirmation_mode: Optional[bool] = None) -> tuple[bool, bool, Optional[dict]]:
         """
         (passed, needs_confirm, gate) — gate is evaluate_gate's dict, None
         when it couldn't be evaluated. notify=False skips the "blocked" push
@@ -1169,8 +1177,33 @@ class ORBEngine(GateWatchMixin):
         session VWAP (hub status — self.session_vwap is only the opening
         bar's), and this engine's ORB high/low. Fails closed: if the gate
         can't be evaluated, the entry is blocked, not waved through.
+
+        Confirmation mode (account daily loss caps, 0.8.05): when the
+        account's day P&L is past the soft cap, the composite bar rises to
+        +10 with a 10-close hold and no MODERATE / confirm-first path.
+        The bar is enforced regardless of the configured gate mode: a
+        daily/intraday/"and" gate ignores min_composite/min_hold_bars,
+        so in confirmation mode the evaluation is forced to composite
+        mode (CodeRabbit PR #126). `confirmation_mode=None` reads the
+        live account state (so the gate watch and pending-confirmation
+        re-checks pick it up automatically); pass True/False explicitly
+        only in tests.
         """
         from services.entry_check_service import evaluate_gate
+
+        if confirmation_mode is None:
+            confirmation_mode = account_risk.mode(self.paper) == account_risk.CONFIRMATION
+
+        if confirmation_mode:
+            # The confirmation bar (+10 composite + 10 closes beyond the
+            # level) is the only bar in confirmation mode, and only the
+            # composite gate evaluates it — a daily/intraday/"and" gate
+            # silently drops min_composite/min_hold_bars. Force composite
+            # mode so the requirements hold whatever the strategy
+            # configured. Placed before the intraday_closes fetch: the
+            # hold check needs the hub's 1-min bars, which are only
+            # fetched when mode != "daily".
+            mode = "composite"
 
         vwap = self._live_session_vwap()
 
@@ -1190,6 +1223,8 @@ class ORBEngine(GateWatchMixin):
             evaluate_gate, self.ticker, direction, required, trigger_price,
             vwap=vwap, orh=self.orh, orl=self.orl, intraday_closes=intraday_closes,
             mode=mode,
+            min_composite=(account_risk.CONFIRM_COMPOSITE_MIN if confirmation_mode else None),
+            min_hold_bars=(account_risk.CONFIRM_HOLD_BARS if confirmation_mode else 0),
         )
         try:
             gate = future.result(timeout=TECHNICALS_GATE_TIMEOUT_S)
@@ -1287,6 +1322,19 @@ class ORBEngine(GateWatchMixin):
             )
             return
 
+        # Account-level daily loss caps (0.8.05) — one day P&L shared by
+        # every strategy in this paper/live account. HALTED blocks every
+        # entry here, before any contract is selected. The per-engine limit
+        # above stays as a backstop.
+        if account_risk.mode(self.paper) == account_risk.HALTED:
+            self.debug.emit(
+                "WARN",
+                f"Entry blocked — account daily loss limit reached "
+                f"(account day P&L: ${account_risk.realized_pnl(self.paper):.0f}). "
+                f"All strategies paused for today.",
+            )
+            return
+
         if self._check_reentry_cooldown(direction):
             cooldown_min = self.profile.get("re_entry_cooldown_min", 45)
             last = self._last_loss_by_direction.get(direction, {})
@@ -1308,6 +1356,7 @@ class ORBEngine(GateWatchMixin):
         gate_cfg = self.config.get("technicals_gate") or {}
         gate_mode = self._gate_mode(gate_cfg)
         gate_needs_confirm = False
+        _gate_checked = False  # did _check_technicals_gate run for this signal?
         if gate_snapshot is None and self.profile_key == "MUSE_REVERSAL":
             # MUSE has no composite gate (bypassed by design); its internal
             # gate — scorer fire + 3-bar VWAP hold + intraday technicals ≥5 —
@@ -1323,6 +1372,7 @@ class ORBEngine(GateWatchMixin):
             gate_ok, gate_needs_confirm, gate = self._check_technicals_gate(
                 direction, trigger_price, gate_cfg.get("required") or [], mode=gate_mode,
                 notify=not watch)
+            _gate_checked = True
             if not gate_ok:
                 # A blocked REVERSAL entry tells the scorer, which un-latches
                 # with a cooldown so it may fire again later this session —
@@ -1338,6 +1388,25 @@ class ORBEngine(GateWatchMixin):
             # This signal passed on its own — any watch is superseded.
             self._end_gate_watch("cancelled", "a new signal passed the gate", notify=False)
             gate_snapshot = gate
+
+        # Account confirmation mode (0.8.05, CodeRabbit PR #126): the +10
+        # composite + 10-close hold must be enforced even when the
+        # technicals gate never ran for this signal — a disabled gate
+        # skips _check_technicals_gate entirely, and a confirmed gate
+        # watch (gate_result) was validated when the watch confirmed, which
+        # may predate the soft cap. _check_technicals_gate forces composite
+        # mode in confirmation mode, so this one call enforces the bar.
+        # Skipped when the gate already ran above, and for MUSE — its
+        # confirmation bar (VWAP hold + intraday technicals) is enforced
+        # in _muse_on_bar, not by the composite gate.
+        if (account_risk.mode(self.paper) == account_risk.CONFIRMATION
+                and not _gate_checked
+                and self.profile_key != "MUSE_REVERSAL"):
+            gate_ok, _, _conf_gate = self._check_technicals_gate(
+                direction, trigger_price, [], mode="composite", notify=True)
+            if not gate_ok:
+                return
+            gate_snapshot = _conf_gate
 
         # VWAP soft confirmation (log only — does not block entry)
         if self.session_vwap is not None:
@@ -1688,6 +1757,26 @@ class ORBEngine(GateWatchMixin):
             if prefilled_order is not None:
                 submitted = prefilled_order
             else:
+                # Account-level halt re-check (0.8.05, CodeRabbit PR #126):
+                # _enter_trade's HALTED check doesn't cover the deferred
+                # path — approve_pending_entry -> _enter_pending -> here —
+                # so another strategy can trigger the hard cap while a
+                # confirmation is pending. Recheck immediately before the
+                # BUY; when HALTED, refuse to submit. _enter_pending's
+                # except path resolves the row EXPIRED (no trade was taken)
+                # and the error surfaces to the approver. Manual trades
+                # (an explicit user order) and prefilled orders (already
+                # filled — this is post-fill setup only) are exempt. Exit
+                # management is untouched — this only gates new BUYs.
+                if (not manual
+                        and account_risk.mode(self.paper) == account_risk.HALTED):
+                    self.debug.emit(
+                        "WARN",
+                        "Entry blocked — account daily loss limit reached "
+                        f"(account day P&L: ${account_risk.realized_pnl(self.paper):.0f}). "
+                        "No order submitted.",
+                    )
+                    raise RuntimeError("account daily loss limit reached — entry blocked")
                 order_req = MarketOrderRequest(
                     symbol=contract["symbol"],
                     qty=qty,
@@ -3389,6 +3478,20 @@ class ORBEngine(GateWatchMixin):
         self._session_realized_pnl += pnl
         self._overlay_realized_pnl += pnl
 
+        # Account-level day P&L (0.8.05): every leg close feeds the shared
+        # account total, so the soft/hard caps see the same P&L the session
+        # does. Log on a mode transition so the flip is visible in debug.
+        _prev_acct_mode = account_risk.mode(self.paper)
+        _new_acct_mode = account_risk.record_pnl(self.paper, pnl)
+        if _new_acct_mode != _prev_acct_mode:
+            self.debug.emit(
+                "WARN",
+                f"Account day P&L ${account_risk.realized_pnl(self.paper):.0f} — "
+                f"account mode now {_new_acct_mode} "
+                f"(soft cap ${account_risk.ACCOUNT_SOFT_CAP_PNL:.0f} / "
+                f"hard cap ${account_risk.ACCOUNT_HARD_CAP_PNL:.0f}).",
+            )
+
         if closing_all:
             # Full close: record a direction-specific loss for re-entry cooldown,
             # then check whether the daily loss limit has now been breached.
@@ -4460,7 +4563,8 @@ class ORBEngine(GateWatchMixin):
 
         Only runs when armed by a scorer fire and no trade is open.
         Feeds the VWAP hold tracker; when the hold completes, checks
-        the intraday subtotal (>= 5 of 6) and, if it passes, enters
+        the intraday subtotal (>= 5 of 6, >= 6 in account confirmation
+        mode) and, if it passes, enters
         with gate_result=False — the muse gate already passed, so the
         composite gate must NOT re-run (that is the 2026-11-02 block).
         _enter_trade still enforces active (paused => no entry),
@@ -4500,7 +4604,15 @@ class ORBEngine(GateWatchMixin):
                             "MUSE_REVERSAL hold lost on VWAP cross - timer reset")
             return
         score, detail = self._muse_intraday_score(direction, bar.close)
-        if score >= 5:
+        # Confirmation mode (0.8.05): the technicals bar rises 5 -> 6 once
+        # the account is past the soft cap. 6 is the scorer's max (three
+        # terms of at most +2), so confirmation requires a perfect
+        # intraday score — stricter than the normal 5, but reachable
+        # (CodeRabbit PR #126: 7 was unreachable, so no MUSE entry could
+        # pass after the soft cap).
+        need = (account_risk.MUSE_CONFIRM_TECHNICALS_MIN
+                if account_risk.mode(self.paper) == account_risk.CONFIRMATION else 5)
+        if score >= need:
             self._muse_armed = False
             # Fresh reclaim state for the new trade (never reuse a
             # stale pending flag from a previous trade this session).
@@ -4524,7 +4636,7 @@ class ORBEngine(GateWatchMixin):
             if detail != last:
                 self._muse_last_score_log = detail
                 self.debug.emit("INFO",
-                                f"MUSE_REVERSAL hold complete — technicals {score}/5 "
+                                f"MUSE_REVERSAL hold complete — technicals {score}/{need} "
                                 f"({detail}) — waiting")
 
     def _feed_runner_exit(self, bar: OrbBar) -> None:
@@ -4920,6 +5032,8 @@ class ORBEngine(GateWatchMixin):
             "exit_state":                 em.to_dict() if em else None,
             "session_pnl":                round(self._session_realized_pnl, 2),
             "session_halted":             self._session_halted,
+            "account_day_pnl":            round(account_risk.realized_pnl(self.paper), 2),
+            "account_mode":                account_risk.mode(self.paper),
             "daily_loss_limit":           self.profile.get("daily_loss_limit", 0),
             "re_entry_cooldown_min":      self.profile.get("re_entry_cooldown_min", 45),
             "gate_watch":                 self.gate_watch_public(),
