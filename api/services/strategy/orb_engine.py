@@ -950,15 +950,14 @@ class ORBEngine(GateWatchMixin):
                 # Spec §10.2: do NOT enter on the scorer fire. Arm the
                 # 3-bar VWAP hold; entry happens in _muse_on_bar once the
                 # hold completes and intraday technicals reach >= 5
-                # (>= 7 in account confirmation mode, 0.8.05).
+                # (>= 6 in account confirmation mode, 0.8.05).
                 # The old REVERSAL path below is untouched.
                 from services.strategy.muse_reversal import VwapSideTracker
-                # Confirmation mode (0.8.05): once the account is past the
-                # soft cap, the VWAP hold lengthens — the reversal has to
-                # prove itself for longer before it may enter.
-                hold_bars = (account_risk.MUSE_CONFIRM_HOLD_BARS
-                             if account_risk.mode(self.paper) == account_risk.CONFIRMATION
-                             else int(self.profile.get("vwap_hold_bars", 3)))
+                # No confirmation-mode lengthening of the hold (0.8.05): a
+                # reversal's edge is the first minutes, so a 10-min hold would
+                # all but disable MUSE after the soft cap. The extra caution
+                # lives in the technicals bar (>= 6) instead.
+                hold_bars = int(self.profile.get("vwap_hold_bars", 3))
                 reclaim_bars = int(self.profile.get("vwap_reclaim_bars", 3))
                 self._muse_armed = True
                 self._muse_direction = direction

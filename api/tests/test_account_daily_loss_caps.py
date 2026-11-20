@@ -3,7 +3,7 @@ Account-level daily loss caps (0.8.05, 2026-11-19).
 
 One day P&L shared by every strategy engine in the same paper/live
 account: -$250 soft cap -> confirmation mode (+10 composite + 10
-consecutive 1-min closes beyond the level; MUSE 10 VWAP-hold bars +
+consecutive 1-min closes beyond the level; MUSE normal 3-bar VWAP hold +
 technicals >= 7), -$400 hard cap -> no new entries from any strategy.
 """
 import os
