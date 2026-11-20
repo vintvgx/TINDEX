@@ -166,3 +166,13 @@ def test_no_live_otm_contract_skips_entry():
     best = _select(chain, orl=735.47, trigger=730.00, composite_total=8,
                    max_entry_premium=float("inf"))
     assert best is None
+
+
+@pytest.mark.parametrize("direction,trigger,level,expected", [
+    ("PUT", 734.00, 735.10, "LARGE"),    # $1.10 past ORL in the trade direction
+    ("PUT", 736.20, 735.10, "MEDIUM"),   # back above ORL: not an extension
+    ("CALL", 736.20, 735.10, "LARGE"),
+    ("CALL", 734.00, 735.10, "MEDIUM"),  # back below ORH: not an extension
+])
+def test_move_tier_extension_is_directional(direction, trigger, level, expected):
+    assert move_tier(12, trigger, level, direction) == expected

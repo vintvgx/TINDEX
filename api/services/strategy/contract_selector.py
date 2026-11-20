@@ -123,17 +123,27 @@ MIN_LIVE_OTM = 0.25
 
 
 def move_tier(composite_total: Optional[int], trigger_price: float,
-              breakout_level: float) -> str:
+              breakout_level: float, direction: Optional[str] = None) -> str:
     """Expected-move tier from the gate composite + trigger extension.
 
     LARGE: composite >= +10 and the trigger closed >= $1.00 past the level
     (the big-move confluence). SMALL: composite <= +5 (MODERATE entries —
     the move is likely small). MEDIUM: everything else, including
     composite_total=None (no composite info — don't change behavior).
+
+    With `direction`, the extension is signed — only distance PAST the level
+    in the trade direction counts (a CALL trigger back below ORH, e.g. a
+    delayed confirm-first entry, is not an extension). Without it, the
+    absolute distance is used (legacy behavior).
     """
     if composite_total is None:
         return "MEDIUM"
-    extension = abs(trigger_price - breakout_level)
+    if direction == "CALL":
+        extension = trigger_price - breakout_level
+    elif direction == "PUT":
+        extension = breakout_level - trigger_price
+    else:
+        extension = abs(trigger_price - breakout_level)
     if (composite_total >= _MOVE_TIER_LARGE_COMPOSITE
             and extension >= _MOVE_TIER_LARGE_EXTENSION):
         return "LARGE"
@@ -224,7 +234,7 @@ def select_contract(
         # near-ATM (higher delta, nearer offset), MEDIUM is the profile
         # bands unchanged. The scorer's targets are the midpoints of these
         # bands, so they shift automatically — no scorer change needed.
-        tier = move_tier(composite_total, trigger_price, breakout_level)
+        tier = move_tier(composite_total, trigger_price, breakout_level, direction)
         tier_bands = _TIER_BANDS[tier]
         if tier_bands[0] is not None:
             effective_delta_min, effective_delta_max = tier_bands[0]
