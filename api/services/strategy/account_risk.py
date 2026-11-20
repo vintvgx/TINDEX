@@ -12,7 +12,7 @@ Modes, from the account's realized day P&L:
   NORMAL        day P&L > -$250 — standard entry rules.
   CONFIRMATION  day P&L <= -$250 — re-entries need much more confluence
                 (composite >= +10 + 10 consecutive 1-min closes beyond
-                the level; MUSE: 10 VWAP-hold bars + technicals >= 6).
+                the level; MUSE: normal 3-bar VWAP hold + technicals >= 6).
                 Latches for the rest of the day once triggered — a winning
                 re-entry does not loosen it.
   HALTED        day P&L <= -$400 — no new entries from any strategy.
@@ -49,7 +49,8 @@ CONFIRM_HOLD_BARS = 10
 # PR #126). 6 means confirmation requires a perfect intraday score —
 # stricter than the normal 5, but reachable.
 MUSE_CONFIRM_TECHNICALS_MIN = 6
-MUSE_CONFIRM_HOLD_BARS = 10
+# MUSE keeps its normal 3-bar VWAP hold in confirmation mode: a reversal's
+# edge is the first minutes, so a longer hold would all but disable it.
 
 NORMAL = "NORMAL"
 CONFIRMATION = "CONFIRMATION"

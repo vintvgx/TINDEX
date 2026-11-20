@@ -2,10 +2,20 @@
 0DTE contract selection.
 
 Filter pipeline (hard — fail → discard):
-  1. Strike: offset inside profile's [offset_min, offset_max] window
-             (budget mode: within _BUDGET_STRIKE_TOLERANCE of the fib extension anchor)
+  0. Expected-move tier (standard mode only): LARGE / MEDIUM / SMALL,
+     read off the gate composite + how far the trigger closed past the
+     level — shifts the delta/offset bands before scoring (see
+     move_tier). LARGE leans OTM, SMALL leans near-ATM, MEDIUM is the
+     profile bands unchanged.
+  1. Strike: offset inside the tier-adjusted [offset_min, offset_max]
+             window (budget mode: within _BUDGET_STRIKE_TOLERANCE of the
+             fib extension anchor)
+  1b. Live-price OTM (standard mode only): strike OTM vs trigger_price
+      (the live price at entry) by at least MIN_LIVE_OTM ($0.25). The
+      level anchor goes stale on a waterfall — the Nov 19 734P was 1.47
+      OTM vs ORL but $1.06 ITM vs the $732.94 live price.
   2. Greeks present — contracts without delta are rejected on 0DTE
-  3. Delta inside profile's [delta_min, delta_max] range
+  3. Delta inside the tier-adjusted [delta_min, delta_max] range
              (budget mode: overridden by _BUDGET_DELTA_RANGES[fib_level])
   4. Ask > 0
   5. Bid/ask spread % ≤ max_spread_pct (profile override → default 0.25)
@@ -20,10 +30,10 @@ Filter pipeline (hard — fail → discard):
 
 Scoring (lower = better — determines which survivor is selected):
   Standard mode:
-    • Delta distance from profile midpoint  (weight 1.0)
-    • Offset distance from profile midpoint (weight 0.5)
-    • Spread %                              (weight 0.3)
-    • VWAP misalignment penalty            (weight 0.05 when price/direction disagree)
+    • Delta distance from the tier-adjusted midpoint  (weight 1.0)
+    • Offset distance from the tier-adjusted midpoint (weight 0.5)
+    • Spread %                                        (weight 0.3)
+    • VWAP misalignment penalty                      (weight 0.05 when price/direction disagree)
   Budget mode:
     • Distance from fib anchor strike      (weight 1.0)
     • Ask price fraction of budget cap     (weight 0.5)
@@ -39,7 +49,11 @@ Note on trigger_price vs breakout_level:
   is used as the strike anchor.  trigger_price is the actual tick that fired
   entry — it may be slightly past the boundary due to polling latency.  It is
   used for VWAP comparison but not for strike offset computation, to keep the
-  anchor clean and reproducible.
+  anchor clean and reproducible.  The live-price OTM check (filter 1b) is the
+  exception: it uses trigger_price as the live price, so a strike that's OTM
+  vs the level but ITM vs the fill is rejected. On a waterfall the trigger can
+  be dollars past the level (Nov 19: $2.53), and the level anchor alone can't
+  see it.
 
 Note on fib_levels:
   In standard mode, passed in for future use.
@@ -81,6 +95,61 @@ _BUDGET_DELTA_RANGES = {
     "2.618": (0.03, 0.09),
 }
 _BUDGET_STRIKE_TOLERANCE = 0.75  # |strike - fib_anchor| ≤ this to pass filter
+
+# Expected-move tiers (2026-11-19, 0.8.06): OTM vs ITM is a function of
+# expected move size, not a fixed preference. A big expected move wants OTM
+# (cheaper, bigger % return, the move covers the distance); a small expected
+# move needs near-ATM (needs the delta). The tier is read off the gate
+# composite + how far the trigger closed past the level — both already known
+# at selection. Thresholds are fit to three November days (Nov 17 +12/$1.09
+# past → $9.40 move; Nov 18 +11/$0.59 past → reversal; Nov 19 +8/$2.53 past
+# → $4.03 move); the December paper test validates them. ORB range, VWAP
+# distance and VIX are candidates for a later tier revision, not v1.
+_MOVE_TIER_LARGE_COMPOSITE = 10    # composite >= +10 ...
+_MOVE_TIER_LARGE_EXTENSION = 1.00  # ... and trigger >= $1.00 past the level
+_MOVE_TIER_SMALL_COMPOSITE = 5     # composite <= +5 (MODERATE) = small move
+# tier: ((delta_min, delta_max), (offset_min, offset_max)); MEDIUM is None
+# (= the profile bands, unchanged).
+_TIER_BANDS = {
+    "LARGE":  ((0.22, 0.34), (2.00, 3.50)),
+    "MEDIUM": (None, None),
+    "SMALL":  ((0.38, 0.52), (1.25, 2.00)),
+}
+
+# A contract must be OTM vs the LIVE price (trigger_price) by at least this
+# much (standard mode). $0.25 is calibrated so the Nov 17 winner (736P,
+# $0.40 OTM at entry) passes; a $0.50 minimum would have blocked it.
+MIN_LIVE_OTM = 0.25
+
+
+def move_tier(composite_total: Optional[int], trigger_price: float,
+              breakout_level: float, direction: Optional[str] = None) -> str:
+    """Expected-move tier from the gate composite + trigger extension.
+
+    LARGE: composite >= +10 and the trigger closed >= $1.00 past the level
+    (the big-move confluence). SMALL: composite <= +5 (MODERATE entries —
+    the move is likely small). MEDIUM: everything else, including
+    composite_total=None (no composite info — don't change behavior).
+
+    With `direction`, the extension is signed — only distance PAST the level
+    in the trade direction counts (a CALL trigger back below ORH, e.g. a
+    delayed confirm-first entry, is not an extension). Without it, the
+    absolute distance is used (legacy behavior).
+    """
+    if composite_total is None:
+        return "MEDIUM"
+    if direction == "CALL":
+        extension = trigger_price - breakout_level
+    elif direction == "PUT":
+        extension = breakout_level - trigger_price
+    else:
+        extension = abs(trigger_price - breakout_level)
+    if (composite_total >= _MOVE_TIER_LARGE_COMPOSITE
+            and extension >= _MOVE_TIER_LARGE_EXTENSION):
+        return "LARGE"
+    if composite_total <= _MOVE_TIER_SMALL_COMPOSITE:
+        return "SMALL"
+    return "MEDIUM"
 
 # ── Time-of-day strike/delta scaling (standard mode only) ────────────────────
 # An OTM strike needs time to work — the same offset/delta window that's
@@ -126,6 +195,7 @@ def select_contract(
     budget_fib_level: str = "1.0",
     minutes_since_orb_close: Optional[float] = None,
     max_entry_premium: Optional[float] = None,
+    composite_total: Optional[int] = None,
 ) -> dict | None:
     today          = date.today()
     option_type    = "call" if direction == "CALL" else "put"
@@ -157,23 +227,49 @@ def select_contract(
         effective_offset_min = offset_min
         effective_offset_max = offset_max
     else:
-        fib_anchor          = None
-        effective_delta_min = delta_min
-        effective_delta_max = delta_max
-        effective_offset_min = offset_min
-        effective_offset_max = offset_max
+        fib_anchor = None
+        # ── Expected-move tier (dynamic targets, 0.8.06) ──
+        # The tier shifts the scorer's target delta and the offset window:
+        # LARGE leans OTM (lower delta, farther offset), SMALL leans
+        # near-ATM (higher delta, nearer offset), MEDIUM is the profile
+        # bands unchanged. The scorer's targets are the midpoints of these
+        # bands, so they shift automatically — no scorer change needed.
+        tier = move_tier(composite_total, trigger_price, breakout_level, direction)
+        tier_bands = _TIER_BANDS[tier]
+        if tier_bands[0] is not None:
+            effective_delta_min, effective_delta_max = tier_bands[0]
+            effective_offset_min, effective_offset_max = tier_bands[1]
+        else:
+            effective_delta_min = delta_min
+            effective_delta_max = delta_max
+            effective_offset_min = offset_min
+            effective_offset_max = offset_max
+        if tier != "MEDIUM":
+            logger.info(
+                "[ContractSelector] Expected-move tier %s (composite=%s, extension=$%.2f): "
+                "delta [%.2f, %.2f], offset [%.2f, %.2f]",
+                tier, composite_total, abs(trigger_price - breakout_level),
+                effective_delta_min, effective_delta_max,
+                effective_offset_min, effective_offset_max,
+            )
         # ── Time-of-day narrowing — see _ORB_TO_CLOSE_MINUTES doc above ──
+        # Applies to the tier bands (not the profile bands): a LARGE window
+        # narrows from [2.00, 3.50], not from [1.25, 2.50]. The narrowing
+        # is proportional, so the window width shrinks by at most 60% and
+        # never collapses (LARGE keeps >= $0.60 of width at the close).
         if minutes_since_orb_close is not None:
             time_frac = max(0.0, min(1.0, minutes_since_orb_close / _ORB_TO_CLOSE_MINUTES))
             shrink    = time_frac * _TOD_MAX_SHRINK
-            effective_offset_max = offset_max - (offset_max - offset_min) * shrink
-            effective_delta_min  = delta_min + (delta_max - delta_min) * shrink
+            _off_max_before = effective_offset_max
+            _d_min_before   = effective_delta_min
+            effective_offset_max = effective_offset_max - (effective_offset_max - effective_offset_min) * shrink
+            effective_delta_min  = effective_delta_min + (effective_delta_max - effective_delta_min) * shrink
             if shrink > 0:
                 logger.info(
                     "[ContractSelector] TOD narrowing (%.0f min since ORB close, "
                     "frac=%.2f): offset_max %.2f→%.2f, delta_min %.2f→%.2f",
-                    minutes_since_orb_close, time_frac, offset_max, effective_offset_max,
-                    delta_min, effective_delta_min,
+                    minutes_since_orb_close, time_frac, _off_max_before, effective_offset_max,
+                    _d_min_before, effective_delta_min,
                 )
 
     # ── VWAP soft confirmation ─────────────────────────────────────────────────
@@ -261,6 +357,17 @@ def select_contract(
             # time-of-day scaling above.
             if offset < effective_offset_min or offset > effective_offset_max:
                 continue
+            # 1b. Live-price OTM check (0.8.06): the strike must be OTM vs
+            # the LIVE price (trigger_price) by at least MIN_LIVE_OTM, not
+            # just vs the level. The level anchor goes stale on a waterfall
+            # (Nov 19 734P: 1.47 OTM vs ORL but $1.06 ITM vs the $732.94
+            # live price). This is the guarantee underneath the tier bands:
+            # whatever the targets say, the pick is actually OTM at the
+            # fill. Budget mode is exempt — its fib anchor + low delta
+            # range already guarantee far-OTM.
+            live_offset = (trigger_price - strike) if direction == "PUT" else (strike - trigger_price)
+            if live_offset < MIN_LIVE_OTM:
+                continue
         # 2. Delta range — enforced only when greeks are present (indicative feed omits them)
         if delta is not None and not (effective_delta_min <= delta <= effective_delta_max):
             continue
@@ -298,10 +405,22 @@ def select_contract(
         else:
             # Prefer the OTM side of the breakout in the trade direction, nearest the
             # money; fall back to nearest overall. Capital is sized downstream.
-            directional = [c for c in affordable
+            # 0.8.06: prefer strikes that are OTM vs the LIVE price too — the
+            # level anchor goes stale on a waterfall, and the fallback is
+            # where a waterfall day lands. The pool is affordable AND live-OTM;
+            # if none qualifies, skip the entry rather than buy ITM or over
+            # the cap.
+            live_otm = [c for c in affordable
+                        if ((trigger_price - c["strike"]) if direction == "PUT"
+                            else (c["strike"] - trigger_price)) >= MIN_LIVE_OTM]
+            if not live_otm:
+                logger.warning("[ContractSelector] No affordable live-OTM contract for %s %s — skipping entry",
+                               ticker, direction)
+                return None
+            directional = [c for c in live_otm
                            if (c["strike"] >= breakout_level if direction == "CALL"
                                else c["strike"] <= breakout_level)]
-            pool = directional or affordable
+            pool = directional or live_otm
             pool.sort(key=lambda c: (abs(c["strike"] - breakout_level), c["spread_pct"]))
             best = pool[0]
 

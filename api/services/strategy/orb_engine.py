@@ -950,15 +950,14 @@ class ORBEngine(GateWatchMixin):
                 # Spec §10.2: do NOT enter on the scorer fire. Arm the
                 # 3-bar VWAP hold; entry happens in _muse_on_bar once the
                 # hold completes and intraday technicals reach >= 5
-                # (>= 7 in account confirmation mode, 0.8.05).
+                # (>= 6 in account confirmation mode, 0.8.05).
                 # The old REVERSAL path below is untouched.
                 from services.strategy.muse_reversal import VwapSideTracker
-                # Confirmation mode (0.8.05): once the account is past the
-                # soft cap, the VWAP hold lengthens — the reversal has to
-                # prove itself for longer before it may enter.
-                hold_bars = (account_risk.MUSE_CONFIRM_HOLD_BARS
-                             if account_risk.mode(self.paper) == account_risk.CONFIRMATION
-                             else int(self.profile.get("vwap_hold_bars", 3)))
+                # No confirmation-mode lengthening of the hold (0.8.05): a
+                # reversal's edge is the first minutes, so a 10-min hold would
+                # all but disable MUSE after the soft cap. The extra caution
+                # lives in the technicals bar (>= 6) instead.
+                hold_bars = int(self.profile.get("vwap_hold_bars", 3))
                 reclaim_bars = int(self.profile.get("vwap_reclaim_bars", 3))
                 self._muse_armed = True
                 self._muse_direction = direction
@@ -1430,6 +1429,17 @@ class ORBEngine(GateWatchMixin):
                                                second=0, microsecond=0)
         minutes_since_orb_close = max(0.0, (datetime.now(ET) - _orb_close).total_seconds() / 60)
 
+        # Composite total for the expected-move tier (0.8.06): the gate dict
+        # carries it under ["composite"][direction]["total"]. The MUSE /
+        # internal gate shapes don't, so read defensively — missing means
+        # MEDIUM (today's behavior). Use gate_snapshot, not the `gate`
+        # local: `gate` is only bound when the composite gate ran, but
+        # gate_snapshot is the _enter_trade parameter and is always defined
+        # (None when no gate ran, the MUSE dict for MUSE entries).
+        _comp = (gate_snapshot or {}).get("composite") or {}
+        _side = _comp.get(direction) or {}
+        composite_total = _side.get("total")
+
         contract = select_contract(
             ticker=self.ticker,
             direction=direction,
@@ -1441,6 +1451,7 @@ class ORBEngine(GateWatchMixin):
             profile=self.profile,
             vwap=self.session_vwap,
             minutes_since_orb_close=minutes_since_orb_close,
+            composite_total=composite_total,
         )
 
         if not contract:
