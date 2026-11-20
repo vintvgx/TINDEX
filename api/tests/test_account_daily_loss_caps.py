@@ -9,8 +9,9 @@ technicals >= 7), -$400 hard cap -> no new entries from any strategy.
 import os
 import sys
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from unittest import mock
 from unittest.mock import MagicMock
 
 import pytest
@@ -53,6 +54,33 @@ def test_record_pnl_accumulates_and_returns_mode():
     assert account_risk.mode(True) == account_risk.CONFIRMATION
 
 
+def test_mode_latches_after_profitable_exit():
+    # -$300 trips the soft cap; a +$100 winner pulls the running total
+    # back to -$200, but the mode stays CONFIRMATION — a winning re-entry
+    # must not loosen the requirements (CodeRabbit PR #126).
+    account_risk.record_pnl(True, -300.0)
+    assert account_risk.mode(True) == account_risk.CONFIRMATION
+    account_risk.record_pnl(True, 100.0)
+    assert account_risk.realized_pnl(True) == -200.0
+    assert account_risk.mode(True) == account_risk.CONFIRMATION
+    # A further -$250 loss trips the hard cap; a +$100 winner does not
+    # release the halt.
+    account_risk.record_pnl(True, -250.0)
+    assert account_risk.mode(True) == account_risk.HALTED
+    account_risk.record_pnl(True, 100.0)
+    assert account_risk.realized_pnl(True) == -350.0
+    assert account_risk.mode(True) == account_risk.HALTED
+
+
+def test_mode_latch_resets_on_date_change():
+    day1, day2 = date(2026, 11, 19), date(2026, 11, 20)
+    account_risk.record_pnl(True, -300.0, today=day1)
+    assert account_risk.mode(True, today=day1) == account_risk.CONFIRMATION
+    # Next session: fresh record — both the day P&L and the latch reset.
+    assert account_risk.mode(True, today=day2) == account_risk.NORMAL
+    assert account_risk.realized_pnl(True, today=day2) == 0.0
+
+
 def test_date_change_resets_day_pnl():
     day1, day2 = date(2026, 11, 19), date(2026, 11, 20)
     account_risk.record_pnl(True, -500.0, today=day1)
@@ -84,6 +112,16 @@ def _fake_composite(monkeypatch, tier, total):
                 "indicators": [{"key": "vwap", "label": "VWAP", "score": total,
                                 "value": "Above", "detail": "", "available": True}]}
     monkeypatch.setattr(ct, "compute_composite", fake)
+
+
+class _SyncExecutor:
+    """Synchronous stand-in for _GATE_EXECUTOR (runs the gate inline)."""
+
+    def submit(self, fn, *a, **k):
+        class _F:
+            def result(self, timeout=None):
+                return fn(*a, **k)
+        return _F()
 
 
 def test_confirmation_blocks_plus7_passes_plus11(market, monkeypatch):
@@ -168,14 +206,7 @@ def test_gate_forwards_confirmation_bar(monkeypatch):
         return {"passed": True, "needs_confirm": False, "mode": "composite",
                 "summary": "ok", "results": []}
     monkeypatch.setattr(ecs, "evaluate_gate", fake_gate)
-
-    class _Sync:
-        def submit(self, fn, *a, **k):
-            class _F:
-                def result(self, timeout=None):
-                    return fn(*a, **k)
-            return _F()
-    monkeypatch.setattr(oe, "_GATE_EXECUTOR", _Sync())
+    monkeypatch.setattr(oe, "_GATE_EXECUTOR", _SyncExecutor())
 
     eng._check_technicals_gate("CALL", 765.0, [], mode="composite")
     assert seen["min_composite"] is None and seen["min_hold_bars"] == 0
@@ -183,6 +214,98 @@ def test_gate_forwards_confirmation_bar(monkeypatch):
     account_risk.record_pnl(True, -300.0)
     eng._check_technicals_gate("CALL", 765.0, [], mode="composite")
     assert seen["min_composite"] == 10 and seen["min_hold_bars"] == 10
+
+
+def test_gate_forces_composite_mode_in_confirmation(monkeypatch):
+    # A daily-mode gate ignores min_composite/min_hold_bars, so in
+    # confirmation mode the evaluation is forced to composite mode —
+    # the +10 / 10-close bar holds whatever the strategy configured
+    # (CodeRabbit PR #126).
+    eng = _engine()
+    seen = {}
+
+    def fake_gate(*a, **k):
+        seen.update(k)
+        return {"passed": True, "needs_confirm": False, "mode": "composite",
+                "summary": "ok", "results": []}
+    monkeypatch.setattr(ecs, "evaluate_gate", fake_gate)
+    monkeypatch.setattr(oe, "_GATE_EXECUTOR", _SyncExecutor())
+
+    account_risk.record_pnl(True, -300.0)  # CONFIRMATION
+    eng._check_technicals_gate("CALL", 765.0, [], mode="daily")
+    assert seen["mode"] == "composite"
+    assert seen["min_composite"] == 10 and seen["min_hold_bars"] == 10
+
+
+def _disabled_gate_engine():
+    eng = _engine()
+    eng.config["technicals_gate"] = {"enabled": False}
+    return eng
+
+
+def test_disabled_gate_confirmation_blocks_entry(monkeypatch):
+    # The technicals gate is disabled, so it never runs — but in
+    # confirmation mode _enter_trade enforces the +10 bar itself.
+    # A +7 composite must not reach contract selection.
+    eng = _disabled_gate_engine()
+    select = MagicMock(return_value=None)
+    monkeypatch.setattr(oe, "select_contract", select)
+
+    def fake_gate(*a, **k):
+        return {"passed": False, "needs_confirm": False, "mode": "composite",
+                "summary": "composite +7/14 STRONG — confirmation mode needs ≥+10",
+                "results": []}
+    monkeypatch.setattr(ecs, "evaluate_gate", fake_gate)
+    monkeypatch.setattr(oe, "_GATE_EXECUTOR", _SyncExecutor())
+
+    account_risk.record_pnl(True, -300.0)  # CONFIRMATION
+    eng._enter_trade("CALL", 765.0)
+    select.assert_not_called()
+    emitted = " ".join(str(c) for c in eng.debug.emit.call_args_list)
+    assert "confirmation mode needs" in emitted
+
+
+def test_disabled_gate_confirmation_passes_at_plus11(monkeypatch):
+    eng = _disabled_gate_engine()
+    select = MagicMock(return_value=None)
+    monkeypatch.setattr(oe, "select_contract", select)
+
+    def fake_gate(*a, **k):
+        return {"passed": True, "needs_confirm": False, "mode": "composite",
+                "summary": "composite +11/14 STRONG",
+                "results": []}
+    monkeypatch.setattr(ecs, "evaluate_gate", fake_gate)
+    monkeypatch.setattr(oe, "_GATE_EXECUTOR", _SyncExecutor())
+
+    account_risk.record_pnl(True, -300.0)  # CONFIRMATION
+    eng._enter_trade("CALL", 765.0)
+    select.assert_called_once()
+
+
+def test_pending_approval_blocked_when_account_halted():
+    # Another strategy trips the hard cap while a confirmation is
+    # pending: approving it must NOT submit a BUY (CodeRabbit PR #126).
+    # _execute_entry re-checks the account mode immediately before the
+    # order; _enter_pending resolves the row EXPIRED (no trade was taken)
+    # and the error surfaces to the approver.
+    eng = _engine()
+    eng.trading_client = MagicMock()
+    pc = {
+        "id": "pc1", "direction": "CALL", "contract_symbol": "SPY261120C00765000",
+        "trigger_price": 765.0,
+        "_contract": {"symbol": "SPY261120C00765000", "ask": 1.0, "bid": 0.95, "delta": 0.4},
+        "_qty": 4, "_effective_profile": get_profile("TREND_RIDER"),
+        "_gate_snapshot": None,
+        "expires_at": (datetime.now(oe.ET) + timedelta(minutes=5)).isoformat(),
+    }
+    eng._pending_confirmation = pc
+    account_risk.record_pnl(True, -450.0)  # HALTED
+    with pytest.raises(RuntimeError, match="account daily loss limit"):
+        eng.approve_pending_entry("pc1")
+    eng.trading_client.submit_order.assert_not_called()
+    assert eng._pending_confirmation is None  # resolved, not lingering
+    status = eng.logger.update_pending_confirmation.call_args[0][1]["status"]
+    assert status == "EXPIRED"
 
 
 def _muse_engine():
@@ -199,32 +322,82 @@ def _muse_engine():
     return eng
 
 
-def _armed_muse_engine(score):
+class _Bar:
+    def __init__(self, ts, close):
+        self.ts = ts
+        self.close = close
+
+
+def _muse_1m_bars(today_5m):
+    """75 1m bars (09:30 -> 10:44 ET) whose 5-min bucket-end closes are
+    today_5m — the shape _muse_intraday_score resamples."""
+    today = datetime.now(oe.ET).date()
+    start = oe.ET.localize(datetime(today.year, today.month, today.day, 9, 30))
+    bars = []
+    for i in range(len(today_5m) * 5):
+        ts = start + timedelta(minutes=i)
+        bars.append(_Bar(ts, today_5m[min(i // 5, len(today_5m) - 1)]))
+    return bars
+
+
+# Prior sessions: 312 5-min closes declining 762 -> 750 (same shape as
+# test_muse_reversal's score-6 series).
+_MUSE_PRIOR = [762.0 - (12.0 * i / 311) for i in range(312)]
+# Score 6: steady decline, all three intraday rows +2.
+_MUSE_TODAY_6 = [749.50 - (1.30 * i / 14) for i in range(15)]
+# Score 5: an early bounce (+0.70 x3) lifts the intraday RSI to +1 while
+# the resumed decline keeps MACD +2 and trend +2.
+_MUSE_TODAY_5 = [749.38, 749.26, 749.96, 750.66, 751.36, 751.24, 751.12,
+                 751.0, 750.88, 750.76, 750.64, 750.52, 750.4, 750.28, 750.16]
+
+
+def _armed_muse_engine_real(today_5m):
+    """MUSE engine armed for a PUT, fed by REAL hub bars — the intraday
+    score comes from _muse_intraday_score, not a stub. Returns
+    (engine, entered, price). Only the prior-session data source is
+    mocked (its per-day cache); the scorer itself runs for real."""
     eng = _muse_engine()
+    eng.orh, eng.orl = ORH, ORL
+    eng._live_session_vwap = lambda: 760.0
+    eng._hub.get_recent_bars = lambda ticker: _muse_1m_bars(today_5m)
     eng._muse_armed, eng._muse_direction = True, "PUT"
+    price = today_5m[-1]
     tracker = VwapSideTracker("PUT", 3)
-    for c in (759.5, 759.0, 758.5):
+    for c in (price + 0.4, price + 0.2, price + 0.1):
         tracker.feed(c, 760.0)
     assert tracker.complete
     eng._muse_hold_tracker = tracker
-    eng._live_session_vwap = lambda: 760.0
-    eng._muse_intraday_score = lambda d, p: (score, "test")
     entered = []
     eng._enter_trade = lambda d, p, gate_result=None: entered.append((d, p, gate_result))
-    return eng, entered
+    return eng, entered, price
 
 
-def test_muse_confirmation_raises_technicals_bar():
-    # Score 6 enters in NORMAL mode (bar is 5).
-    eng, entered = _armed_muse_engine(6)
-    eng._muse_on_bar(SimpleNamespace(close=759.0, open=759.0, high=759.5, low=758.5, ts=None))
-    assert len(entered) == 1
-    # Same score does NOT enter in CONFIRMATION mode (bar is 7).
+def test_muse_confirmation_boundary_uses_real_score():
+    # 6 is the scorer's max (three terms of at most +2) — the old
+    # confirmation bar of 7 was unreachable, so no MUSE entry could pass
+    # after the soft cap (CodeRabbit PR #126). The bar is now 6: a
+    # perfect intraday score passes, 5 does not.
+    for today_5m, want_score in ((_MUSE_TODAY_6, 6), (_MUSE_TODAY_5, 5)):
+        eng, entered, price = _armed_muse_engine_real(today_5m)
+        bar = SimpleNamespace(close=price, open=price, high=price + 0.5,
+                              low=price - 0.5, ts=None)
+        with mock.patch("services.entry_check_service._prior_closes_5m",
+                        return_value=list(_MUSE_PRIOR)):
+            score, detail = eng._muse_intraday_score("PUT", price)
+            assert score == want_score, (
+                f"test setup: expected {want_score}, got {score} ({detail})")
+            # NORMAL mode (bar 5): both scores enter.
+            eng._muse_on_bar(bar)
+        assert len(entered) == 1, f"score {want_score} should enter in NORMAL mode"
+    # CONFIRMATION mode (bar 6): 6 enters, 5 does not.
     account_risk.record_pnl(True, -300.0)
-    eng, entered = _armed_muse_engine(6)
-    eng._muse_on_bar(SimpleNamespace(close=759.0, open=759.0, high=759.5, low=758.5, ts=None))
-    assert entered == []
-    # Score 7 enters in CONFIRMATION mode.
-    eng, entered = _armed_muse_engine(7)
-    eng._muse_on_bar(SimpleNamespace(close=759.0, open=759.0, high=759.5, low=758.5, ts=None))
-    assert len(entered) == 1
+    for today_5m, should_enter in ((_MUSE_TODAY_6, True), (_MUSE_TODAY_5, False)):
+        eng, entered, price = _armed_muse_engine_real(today_5m)
+        bar = SimpleNamespace(close=price, open=price, high=price + 0.5,
+                              low=price - 0.5, ts=None)
+        with mock.patch("services.entry_check_service._prior_closes_5m",
+                        return_value=list(_MUSE_PRIOR)):
+            eng._muse_on_bar(bar)
+        assert bool(entered) == should_enter, (
+            f"score {6 if should_enter else 5} in CONFIRMATION mode: "
+            f"expected {'enter' if should_enter else 'no entry'}, got {entered}")
