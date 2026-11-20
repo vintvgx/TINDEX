@@ -1430,6 +1430,17 @@ class ORBEngine(GateWatchMixin):
                                                second=0, microsecond=0)
         minutes_since_orb_close = max(0.0, (datetime.now(ET) - _orb_close).total_seconds() / 60)
 
+        # Composite total for the expected-move tier (0.8.06): the gate dict
+        # carries it under ["composite"][direction]["total"]. The MUSE /
+        # internal gate shapes don't, so read defensively — missing means
+        # MEDIUM (today's behavior). Use gate_snapshot, not the `gate`
+        # local: `gate` is only bound when the composite gate ran, but
+        # gate_snapshot is the _enter_trade parameter and is always defined
+        # (None when no gate ran, the MUSE dict for MUSE entries).
+        _comp = (gate_snapshot or {}).get("composite") or {}
+        _side = _comp.get(direction) or {}
+        composite_total = _side.get("total")
+
         contract = select_contract(
             ticker=self.ticker,
             direction=direction,
@@ -1441,6 +1452,7 @@ class ORBEngine(GateWatchMixin):
             profile=self.profile,
             vwap=self.session_vwap,
             minutes_since_orb_close=minutes_since_orb_close,
+            composite_total=composite_total,
         )
 
         if not contract:
